@@ -1,0 +1,34 @@
+# Python 虚拟环境与缓存
+.venv/
+venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# 本地环境配置与密钥
+.env
+.env.*
+!.env.example
+
+# AI2-THOR 运行产物：轨迹、截图、摘要和视频
+runs/
+outputs/
+trajectories/
+*.mp4
+
+# AI2-THOR / Unity 本地下载与构建缓存
+ai2thor_builds/
+unity_builds/
+
+# 操作系统与编辑器文件
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
