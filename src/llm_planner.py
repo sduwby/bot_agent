@@ -60,7 +60,8 @@ def build_user_prompt(
                 f"{i}. {skill}{params} → {status}"
                 + (f" ({result_summary})" if result_summary else "")
             )
-        parts.append(f"## 已执行的操作\n\n{'\n'.join(history_text)}")
+        history_joined = "\n".join(history_text)
+        parts.append(f"## 已执行的操作\n\n{history_joined}")
 
     return "\n\n".join(parts)
 
