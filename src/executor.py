@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any
@@ -17,6 +18,9 @@ from llm_planner import (
     create_backend,
     parse_decision,
 )
+from memory_capture import MemoryCapture
+from memory_recall import MemoryRecall
+from memory_store import MemoryStore, SearchStrategy
 from observation import Observation, build_observation, summarize
 from skill_registry import get_skills_description, validate_parameters
 from task_skills import SkillExecutor, SkillResult
@@ -33,6 +37,7 @@ class AgentExecutor:
         records: list[dict[str, Any]],
         backend: LLMBackend | None = None,
         max_steps: int = 20,
+        max_search_steps: int = 8,
     ) -> None:
         self.controller = controller
         self.run_dir = run_dir
@@ -46,16 +51,54 @@ class AgentExecutor:
             skills_description=get_skills_description()
         )
 
+        # 记忆模块
+        self.session_key = uuid.uuid4().hex[:8]
+        self.store = MemoryStore(run_dir, self.session_key)
+        self.capture = MemoryCapture()
+        self.recall = MemoryRecall(self.store)
+        self.search = SearchStrategy(self.store, max_search_steps)
+        self.searching = False
+        self._observations: list[Observation] = []
+
     def run(self, instruction: str) -> dict[str, Any]:
         """执行一次完整的 Agent 循环，返回任务摘要。"""
         self.skills.record_initial_observation()
         obs = build_observation(self.controller.last_event.metadata)
+        self._observations.append(obs)
         obs_summary = summarize(obs)
 
+        # 初始捕获：记录初始观察
+        initial_memories = self.capture.extract_memories_from_observation(obs, 0)
+        for m in initial_memories:
+            self.store.append_memory(m)
+        self.search.record_explored_position(obs.position, obs.rotation_y, 0)
+
         for step in range(self.max_steps):
-            user_prompt = build_user_prompt(instruction, obs_summary, self.action_history)
-            raw_response = self.backend.chat(self.system_prompt, user_prompt)
-            decision = parse_decision(raw_response)
+            # 搜索模式：使用 SearchStrategy 替代 LLM 决策
+            if self.searching:
+                search_decision = self.search.next_move()
+                if search_decision["skill"] == "done":
+                    return self._build_summary(instruction, False, "搜索耗尽")
+                decision = search_decision
+                user_prompt = build_user_prompt(
+                    instruction, obs_summary, self.action_history,
+                    memory_context=None,
+                )
+                raw_response = f"[搜索模式] {search_decision.get('thought', '')}"
+            else:
+                # 记忆召回：在 LLM 决策前注入相关记忆
+                recall_query = self.recall.build_recall_query(
+                    instruction, obs, self.action_history
+                )
+                recalled = self.recall.recall(recall_query, limit=5)
+                memory_context = self.recall.inject_into_prompt(recalled)
+
+                user_prompt = build_user_prompt(
+                    instruction, obs_summary, self.action_history,
+                    memory_context=memory_context,
+                )
+                raw_response = self.backend.chat(self.system_prompt, user_prompt)
+                decision = parse_decision(raw_response)
 
             if decision is None:
                 self._record_step(step, user_prompt, raw_response, None, None, "决策解析失败")
@@ -90,14 +133,47 @@ class AgentExecutor:
                 "result_summary": result_summary,
             })
 
+            # 更新观察
+            obs = build_observation(self.controller.last_event.metadata)
+            self._observations.append(obs)
+
+            # 捕获：提取并写入 L1 记忆
+            step_memories = self.capture.extract_memories_from_observation(obs, step)
+            for m in step_memories:
+                self.store.append_memory(m)
+
             if not result.success:
-                obs = build_observation(self.controller.last_event.metadata)
+                # 失败时记录教训
+                failure_memory = self.capture.extract_failure_memory(
+                    skill_name, params, result.failure_reason or "未知原因", step, obs.scene_name
+                )
+                self.store.append_memory(failure_memory)
+
                 obs_summary = summarize(obs)
                 obs_summary = self._append_error_to_summary(obs_summary, result.failure_reason or "")
+
+                # 如果 pick 或 place 失败，检查是否进入搜索模式
+                if not self.searching:
+                    target_type = params.get("object_type") or params.get("receptacle_type")
+                    if target_type and self.search.should_search_for(target_type):
+                        self.searching = True
+                        continue
                 continue
 
-            obs = build_observation(self.controller.last_event.metadata)
+            # 成功后退出搜索模式
+            self.searching = False
+
+            # 记录探索位置
+            self.search.record_explored_position(obs.position, obs.rotation_y, step)
+
             obs_summary = summarize(obs)
+
+        # 任务结束后：写入完整 L0 记录
+        conv_records = self.capture.observation_to_conversation(
+            instruction, self.session_key, self._observations, self.action_history
+        )
+        for cr in conv_records:
+            self.store.append_conversation(cr)
 
         # 达到最大步骤数
         return self._build_summary(instruction, False, "达到最大步骤数")

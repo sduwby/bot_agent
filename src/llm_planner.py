@@ -36,12 +36,17 @@ def build_user_prompt(
     instruction: str,
     observation_summary: str,
     action_history: list[dict[str, Any]] | None = None,
+    memory_context: str | None = None,
 ) -> str:
     """构建发给 LLM 的 User Prompt。"""
     parts: list[str] = [
         f"## 当前观察\n\n{observation_summary}",
-        f"## 任务指令\n\n{instruction}",
     ]
+
+    if memory_context:
+        parts.append(memory_context)
+
+    parts.append(f"## 任务指令\n\n{instruction}")
 
     if action_history:
         history_text = []
