@@ -10,6 +10,8 @@ from typing import Any
 
 from ai2thor.controller import Controller
 
+from action_monitor import ActionMonitor
+from failure_classifier import FailureClassifier
 from first_trajectory import inventory_object_ids, record_event
 from llm_planner import (
     LLMBackend,
@@ -22,8 +24,10 @@ from memory_capture import MemoryCapture
 from memory_recall import MemoryRecall
 from memory_store import MemoryStore, SearchStrategy
 from observation import Observation, build_observation, summarize
+from replanner import Replanner
 from skill_registry import get_skills_description, validate_parameters
 from task_skills import SkillExecutor, SkillResult
+from verifier import SubtaskVerifier
 
 
 class AgentExecutor:
@@ -60,6 +64,12 @@ class AgentExecutor:
         self.searching = False
         self._observations: list[Observation] = []
 
+        # 验证与恢复模块
+        self.monitor = ActionMonitor()
+        self.classifier = FailureClassifier()
+        self.verifier = SubtaskVerifier()
+        self.replanner = Replanner()
+
     def run(self, instruction: str) -> dict[str, Any]:
         """执行一次完整的 Agent 循环，返回任务摘要。"""
         self.skills.record_initial_observation()
@@ -74,6 +84,24 @@ class AgentExecutor:
         self.search.record_explored_position(obs.position, obs.rotation_y, 0)
 
         for step in range(self.max_steps):
+            # 循环检测：检查是否陷入重复模式
+            loop = self.monitor.detect_loop(self.action_history)
+            if loop.is_loop and not self.searching:
+                recovery = self.replanner.plan_recovery(loop_detection=loop)
+                recovery_result = self._execute_skill(recovery.skill_name or "scan", recovery.params or {})
+                obs = build_observation(self.controller.last_event.metadata)
+                self._observations.append(obs)
+                obs_summary = summarize(obs)
+                loop_summary = f"[循环恢复] {recovery.reason}"
+                self.action_history.append({
+                    "skill": recovery.skill_name or "scan",
+                    "parameters": recovery.params or {},
+                    "success": recovery_result.success,
+                    "result_summary": loop_summary,
+                })
+                self._record_step(step, "", loop_summary, {"skill": recovery.skill_name or "scan", "parameters": recovery.params or {}, "thought": loop.details}, recovery_result, loop_summary)
+                continue
+
             # 搜索模式：使用 SearchStrategy 替代 LLM 决策
             if self.searching:
                 search_decision = self.search.next_move()
@@ -152,6 +180,47 @@ class AgentExecutor:
                 obs_summary = summarize(obs)
                 obs_summary = self._append_error_to_summary(obs_summary, result.failure_reason or "")
 
+                # [新增] 失败分类 + 自动恢复
+                failure = self.classifier.classify_failure(
+                    skill_name, params, result.failure_reason or "未知"
+                )
+                recovery = self.replanner.plan_recovery(failure_info=failure)
+
+                if recovery.action == "retry" and recovery.skill_name:
+                    # 自动重试
+                    retry_result = self._execute_skill(recovery.skill_name, recovery.params or params)
+                    result_summary = f"[自动重试] {recovery.reason} → {'成功' if retry_result.success else '失败'}"
+                    self.action_history.append({
+                        "skill": recovery.skill_name,
+                        "parameters": recovery.params or params,
+                        "success": retry_result.success,
+                        "result_summary": result_summary,
+                    })
+                    if retry_result.success:
+                        self.searching = False
+                        self.search.record_explored_position(obs.position, obs.rotation_y, step)
+                        obs_summary = summarize(obs)
+                        continue
+
+                elif recovery.action == "scan":
+                    # 自动 scan 重新观察
+                    scan_result = self._execute_skill("scan", {})
+                    result_summary = f"[自动恢复] {recovery.reason}"
+                    self.action_history.append({
+                        "skill": "scan",
+                        "parameters": {},
+                        "success": scan_result.success,
+                        "result_summary": result_summary,
+                    })
+                    obs = build_observation(self.controller.last_event.metadata)
+                    self._observations.append(obs)
+                    obs_summary = summarize(obs)
+                    continue
+
+                elif recovery.action == "abort":
+                    # 超过重试次数，交由 LLM 决策
+                    obs_summary = self._append_error_to_summary(obs_summary, f"[恢复中止] {recovery.reason}")
+
                 # 如果 pick 或 place 失败，检查是否进入搜索模式
                 if not self.searching:
                     target_type = params.get("object_type") or params.get("receptacle_type")
@@ -162,6 +231,23 @@ class AgentExecutor:
 
             # 成功后退出搜索模式
             self.searching = False
+
+            # [新增] 成功后二次验证
+            if skill_name == "pick":
+                verified = self.verifier.verify_pick(
+                    self.controller.last_event.metadata, params.get("object_type", "")
+                )
+                if not verified.success:
+                    obs_summary = self._append_error_to_summary(obs_summary, f"[验证警告] {verified.details}")
+
+            elif skill_name == "place":
+                held_ids = inventory_object_ids(self.controller.last_event.metadata)
+                if held_ids:
+                    verified = self.verifier.verify_place(
+                        self.controller.last_event.metadata, held_ids[0], params.get("receptacle_type", "")
+                    )
+                    if not verified.success:
+                        obs_summary = self._append_error_to_summary(obs_summary, f"[验证警告] {verified.details}")
 
             # 记录探索位置
             self.search.record_explored_position(obs.position, obs.rotation_y, step)
