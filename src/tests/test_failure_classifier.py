@@ -53,6 +53,14 @@ class TestClassifyFailure:
         )
         assert result.category == FailureCategory.PLACEMENT_FAILED
 
+    def test_place_receptacle_not_found(self):
+        result = FailureClassifier.classify_failure(
+            skill_name="place",
+            params={"receptacle_type": "Drawer"},
+            failure_reason="扫描后未发现容器 Drawer",
+        )
+        assert result.category == FailureCategory.OBJECT_NOT_FOUND
+
     def test_move_to_blocked(self):
         """move_to 失败 → NAVIGATION_BLOCKED。"""
         result = FailureClassifier.classify_failure(

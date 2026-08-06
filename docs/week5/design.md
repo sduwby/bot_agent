@@ -349,3 +349,28 @@ class RecoveryAction:
     params: dict[str, Any] | None
     is_final: bool
 ```
+
+## 6. 实际偏差与修复设计（2026-08-06）
+
+初版模块单元测试通过，但主循环集成未达到本设计要求：
+
+- Planner 返回 `done` 时未调用任务验证器，可能把错误目标或空状态判为成功。
+- 放置成功后才从 `inventoryObjects` 获取目标 ID，正常情况下列表已为空，导致 `verify_place` 不执行。
+- 验证失败只生成临时警告，未进入 FailureClassifier/Replanner，且警告会被下一次观察摘要覆盖。
+- 自动重试成功后继续使用重试前的 Observation，没有再次捕获、验证或记录 Agent 步骤。
+- 连续 `scan` 被识别为循环后仍以 `scan` 恢复，会保持循环模式。
+
+修复后的闭环定义如下：
+
+```
+TaskSpec 解析目标
+  → 生成决策（Planner / 搜索 / 恢复）
+  → 执行技能
+  → 立即刷新 Observation
+  → 写入 action_history、轨迹和 L1
+  → pick/place 精确验证
+  → 失败分类与有限恢复
+  → done 时按 TaskSpec 验证最终 object_type + receptacle_type
+```
+
+`done` 只是 Planner 的终止请求，不代表成功。最终成功必须满足目标类型物体确实位于目标类型容器中；验证失败时继续规划，达到最大步数后返回失败。恢复动作不得绕过统一动作后处理流程。重复 `scan` 的恢复动作改为移动探索，确保动作历史能够打破循环。

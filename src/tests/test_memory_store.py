@@ -1,5 +1,7 @@
 """MemoryStore 和 SearchStrategy 的单元测试（不依赖 AI2-THOR）。"""
 
+from __future__ import annotations
+
 import json
 import tempfile
 from datetime import datetime, timezone
@@ -205,11 +207,18 @@ class TestSearchStrategy:
         search = SearchStrategy(store)
         assert search.should_search_for("CreditCard") is True
 
-    def test_should_search_for_in_memory(self, tmp_path: Path) -> None:
+    def test_memory_does_not_prevent_search_when_target_not_visible(self, tmp_path: Path) -> None:
         store = self._make_store(tmp_path)
         store.append_memory(_make_memory(content="CreditCard 在房间中可见"))
         search = SearchStrategy(store)
-        assert search.should_search_for("CreditCard") is False
+        assert search.should_search_for("CreditCard") is True
+
+    def test_visible_target_does_not_need_search(self, tmp_path: Path) -> None:
+        store = self._make_store(tmp_path)
+        search = SearchStrategy(store)
+        assert search.should_search_for(
+            "CreditCard", {"CreditCard", "Apple"}
+        ) is False
 
     def test_next_move_directions(self, tmp_path: Path) -> None:
         store = self._make_store(tmp_path)
@@ -275,3 +284,15 @@ class TestSearchStrategy:
         d = search.next_move()
         assert "thought" in d
         assert "搜索模式" in d["thought"]
+
+    def test_next_move_avoids_explored_pose(self, tmp_path: Path) -> None:
+        store = self._make_store(tmp_path)
+        search = SearchStrategy(store)
+        current = {"x": 0.0, "y": 0.0, "z": 0.0}
+        search.record_explored_position(
+            {"x": 0.0, "y": 0.0, "z": 0.25}, 0.0, 1
+        )
+
+        decision = search.next_move(current, 0.0)
+
+        assert decision["parameters"]["direction"] == "right"

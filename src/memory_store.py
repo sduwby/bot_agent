@@ -117,7 +117,7 @@ class MemoryStore:
         if not keywords:
             keywords = [query_lower]
 
-        candidates: list[tuple[float, MemoryRecord]] = []
+        candidates: list[tuple[tuple[int, float], MemoryRecord]] = []
         for m in self._memories:
             # 类型过滤
             if type_filter and m.type != type_filter:
@@ -132,8 +132,7 @@ class MemoryStore:
                 ts = datetime.fromisoformat(m.updated_at).timestamp()
             except (ValueError, TypeError):
                 ts = 0
-            score = m.priority * 1000 + ts
-            candidates.append((score, m))
+            candidates.append(((m.priority, ts), m))
 
         candidates.sort(key=lambda x: x[0], reverse=True)
         return [m for _, m in candidates[:limit]]
@@ -211,12 +210,20 @@ class SearchStrategy:
         self._explored_positions: list[ExploredPosition] = []
         self._direction_index = 0
 
-    def should_search_for(self, object_type: str) -> bool:
-        """目标类型是否在记忆中？不在则需搜索。"""
-        known = self.store.get_known_object_types()
-        return object_type not in known
+    def should_search_for(
+        self,
+        object_type: str,
+        visible_types: set[str] | None = None,
+    ) -> bool:
+        """目标当前不可见时继续搜索；历史记忆不能代替当前观察。"""
+        visible = {item.casefold() for item in (visible_types or set())}
+        return object_type.casefold() not in visible
 
-    def next_move(self) -> dict[str, Any]:
+    def next_move(
+        self,
+        position: dict[str, float] | None = None,
+        rotation_y: float = 0.0,
+    ) -> dict[str, Any]:
         """返回下一步建议（move_to 技能调用）。
 
         策略：按 _SEARCH_DIRECTIONS 顺序执行探索。
@@ -228,8 +235,7 @@ class SearchStrategy:
                 "parameters": {},
             }
 
-        direction = _SEARCH_DIRECTIONS[self._direction_index % len(_SEARCH_DIRECTIONS)]
-        self._direction_index += 1
+        direction = self._next_unexplored_direction(position, rotation_y)
         self._steps_taken += 1
 
         return {
@@ -237,6 +243,52 @@ class SearchStrategy:
             "skill": "move_to",
             "parameters": {"direction": direction},
         }
+
+    def _next_unexplored_direction(
+        self,
+        position: dict[str, float] | None,
+        rotation_y: float,
+    ) -> str:
+        """优先选择预测落点尚未探索的方向。"""
+        for _ in range(len(_SEARCH_DIRECTIONS)):
+            direction = _SEARCH_DIRECTIONS[
+                self._direction_index % len(_SEARCH_DIRECTIONS)
+            ]
+            self._direction_index += 1
+            if position is None:
+                return direction
+            predicted_position, predicted_rotation = self._predict_pose(
+                position, rotation_y, direction
+            )
+            if not self.is_pose_explored(predicted_position, predicted_rotation):
+                return direction
+        return "right"
+
+    @staticmethod
+    def _predict_pose(
+        position: dict[str, float],
+        rotation_y: float,
+        direction: str,
+    ) -> tuple[dict[str, float], float]:
+        """按 0.25m 网格和 90 度旋转预测一个搜索动作后的位姿。"""
+        predicted = dict(position)
+        predicted_rotation = rotation_y % 360
+        if direction == "left":
+            return predicted, (predicted_rotation - 90) % 360
+        if direction == "right":
+            return predicted, (predicted_rotation + 90) % 360
+
+        step = 0.25 if direction == "forward" else -0.25
+        heading = int(round(predicted_rotation / 90)) % 4
+        if heading == 0:
+            predicted["z"] = predicted.get("z", 0.0) + step
+        elif heading == 1:
+            predicted["x"] = predicted.get("x", 0.0) + step
+        elif heading == 2:
+            predicted["z"] = predicted.get("z", 0.0) - step
+        else:
+            predicted["x"] = predicted.get("x", 0.0) - step
+        return predicted, predicted_rotation
 
     def is_exhausted(self) -> bool:
         """搜索是否已耗尽所有选项"""
@@ -259,6 +311,32 @@ class SearchStrategy:
                 return True
         return False
 
+    def is_pose_explored(
+        self,
+        position: dict[str, float],
+        rotation_y: float,
+        tolerance: float = 0.1,
+    ) -> bool:
+        """位置接近且朝向相同时视为已探索过同一视角。"""
+        for ep in self._explored_positions:
+            if not self._positions_close(position, ep.position, tolerance):
+                continue
+            rotation_delta = abs((rotation_y - ep.rotation_y + 180) % 360 - 180)
+            if rotation_delta < 1.0:
+                return True
+        return False
+
+    @staticmethod
+    def _positions_close(
+        first: dict[str, float],
+        second: dict[str, float],
+        tolerance: float,
+    ) -> bool:
+        return sum(
+            abs(first.get(axis, 0.0) - second.get(axis, 0.0))
+            for axis in ("x", "y", "z")
+        ) < tolerance
+
     def record_explored_position(
         self,
         position: dict,
@@ -272,8 +350,9 @@ class SearchStrategy:
             step=step,
         ))
 
-    def reset(self) -> None:
+    def reset(self, clear_explored: bool = True) -> None:
         """重置搜索状态"""
         self._steps_taken = 0
-        self._explored_positions.clear()
+        if clear_explored:
+            self._explored_positions.clear()
         self._direction_index = 0

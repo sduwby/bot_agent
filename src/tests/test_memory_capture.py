@@ -1,5 +1,7 @@
 """MemoryCapture 单元测试（不依赖 AI2-THOR）。"""
 
+from __future__ import annotations
+
 from pathlib import Path
 
 from memory_capture import MemoryCapture

@@ -56,6 +56,14 @@ class Replanner:
         """
         # 优先处理循环检测
         if loop_detection and loop_detection.is_loop:
+            if "scan" in loop_detection.details:
+                return RecoveryAction(
+                    action="retry",
+                    reason="连续扫描没有产生进展，转向新视角",
+                    skill_name="move_to",
+                    params={"direction": "right"},
+                    is_final=False,
+                )
             return RecoveryAction(
                 action="scan",
                 reason=f"检测到循环（{loop_detection.loop_type}），重新观察环境",
@@ -164,3 +172,7 @@ class Replanner:
     def reset(self) -> None:
         """重置重试计数。"""
         self._retry_counts.clear()
+
+    def record_success(self, skill_name: str) -> None:
+        """技能取得进展后清除该技能累计的失败次数。"""
+        self._retry_counts.pop(skill_name, None)

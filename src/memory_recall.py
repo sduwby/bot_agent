@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from observation import Observation
+from task_parser import parse_instruction
 
 if TYPE_CHECKING:
     from memory_store import MemoryRecord, MemoryStore
@@ -35,7 +36,7 @@ class MemoryRecall:
         - 默认 → 搜索任务指令中的关键词
         """
         if not action_history:
-            return instruction
+            return self._task_query(instruction, observation)
 
         last = action_history[-1]
         if not last.get("success"):
@@ -44,7 +45,19 @@ class MemoryRecall:
                 return params.get("object_type", instruction)
             if last["skill"] == "place":
                 return params.get("receptacle_type", "容器")
-        return instruction
+        return self._task_query(instruction, observation)
+
+    @staticmethod
+    def _task_query(instruction: str, observation: Observation) -> str:
+        """把中文任务转换为可命中结构化英文类型的检索词。"""
+        try:
+            spec = parse_instruction(instruction)
+        except ValueError:
+            return instruction
+        held = {item.casefold() for item in observation.held_object_types}
+        if spec.object_type.casefold() in held:
+            return spec.receptacle_type
+        return f"{spec.object_type} {spec.receptacle_type}"
 
     def recall(
         self,

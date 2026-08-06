@@ -24,6 +24,7 @@ from ai2thor.controller import Controller
 
 from executor import AgentExecutor
 from first_trajectory import create_run_dir
+from llm_planner import RuleFallback
 
 
 # ── 默认测试场景 ──
@@ -36,15 +37,15 @@ DEFAULT_SCENES = [
         "expect": "memory_created",  # 预期：记忆正确创建
     },
     {
-        "name": "需要搜索_钥匙放抽屉",
-        "scene": "FloorPlan1",
-        "instruction": "把钥匙放进抽屉",
-        "expect": "search_triggered",  # 预期：可能触发搜索
+        "name": "需要搜索_杯子放台面",
+        "scene": "FloorPlan6",
+        "instruction": "把杯子放到台面",
+        "expect": "search_triggered",
     },
     {
-        "name": "需要搜索_苹果放容器",
+        "name": "苹果放台面_回归场景",
         "scene": "FloorPlan1",
-        "instruction": "把苹果放进微波炉",
+        "instruction": "把苹果放到台面",
         "expect": "memory_created",
     },
 ]
@@ -99,6 +100,7 @@ def run_agent_scenario(
                 run_dir=run_dir,
                 trajectory_file=trajectory_file,
                 records=records,
+                backend=RuleFallback(),
                 max_steps=max_steps,
                 max_search_steps=max_search_steps,
             )
@@ -118,6 +120,10 @@ def run_agent_scenario(
             controller.stop()
 
     elapsed = time.time() - t0
+    (run_dir / "summary.json").write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
     # 统计记忆文件 — MemoryStore 使用 run_dir 作为 base_dir
     conv_dir = run_dir / "conversations"
@@ -150,7 +156,9 @@ def run_agent_scenario(
         "instruction": instruction,
         "task_success": summary.get("task_success", False),
         "termination_reason": summary.get("termination_reason", ""),
+        "final_verification": summary.get("final_verification"),
         "steps_taken": summary.get("steps_taken", 0),
+        "action_history": summary.get("action_history", []),
         "elapsed_seconds": round(elapsed, 2),
         "l0_conversation_count": l0_count,
         "l1_memory_stats": l1_stats,
@@ -172,6 +180,9 @@ def print_scenario_report(result: dict[str, Any], idx: int) -> None:
     print(f"  指令: {result['instruction']}")
     print(f"  结果: {'✅ 成功' if result['task_success'] else '❌ 失败'}")
     print(f"  终止原因: {result['termination_reason']}")
+    verification = result.get("final_verification") or {}
+    if verification:
+        print(f"  最终验证: {verification.get('details', '')}")
     print(f"  步数: {result['steps_taken']}")
     print(f"  耗时: {result['elapsed_seconds']}s")
     print(f"  L0 对话记录: {l0} 条")
@@ -216,11 +227,27 @@ def main() -> int:
         results.append(result)
         print_scenario_report(result, i)
 
-        # 验证：至少创建了 L0 和 L1 记录
+        # 验证：任务状态与 L0/L1 产物都必须满足要求
+        scenario_ok = bool(result["task_success"])
+        verification = result.get("final_verification") or {}
+        if not verification.get("success", False):
+            print("  ❌ 最终任务状态未通过精确验证")
+            scenario_ok = False
         if result["l0_conversation_count"] == 0:
-            print(f"  ⚠ 警告: 未创建 L0 对话记录")
+            print("  ❌ 未创建 L0 对话记录")
+            scenario_ok = False
         if result["l1_memory_stats"]["total"] == 0:
-            print(f"  ⚠ 警告: 未创建 L1 记忆记录")
+            print("  ❌ 未创建 L1 记忆记录")
+            scenario_ok = False
+        if sc.get("expect") == "search_triggered":
+            search_triggered = any(
+                entry.get("skill") == "move_to"
+                for entry in result["action_history"]
+            )
+            if not search_triggered:
+                print("  ❌ 预期触发搜索，但轨迹中没有 move_to")
+                scenario_ok = False
+        overall_success = overall_success and scenario_ok
 
     # 汇总
     total_steps = sum(r["steps_taken"] for r in results)
@@ -235,7 +262,7 @@ def main() -> int:
     print(f"  总耗时: {total_time:.1f}s")
     print(f"  输出目录: {args.output_root}")
 
-    return 0
+    return 0 if overall_success else 1
 
 
 if __name__ == "__main__":

@@ -27,6 +27,8 @@ _OBJECT_ALIASES = {
     "creditcard": "CreditCard",
     "apple": "Apple",
     "苹果": "Apple",
+    "杯子": "Cup",
+    "cup": "Cup",
     "书": "Book",
     "书本": "Book",
     "钥匙": "Key",
@@ -44,6 +46,8 @@ _RECEPTACLE_ALIASES = {
     "台面": "CounterTop",
     "桌子": "CounterTop",
     "桌面": "CounterTop",
+    "微波炉": "Microwave",
+    "microwave": "Microwave",
 }
 
 

@@ -47,6 +47,17 @@ class ActionMonitor:
             )
 
         window_items = history[-window:]
+        if any(
+            item.get("success") is True
+            and item.get("skill") in {"pick", "place"}
+            for item in window_items
+        ):
+            return LoopDetection(
+                is_loop=False,
+                loop_type=None,
+                window_size=window,
+                details="窗口内包含产生状态进展的成功动作",
+            )
         keys = [_action_key(item) for item in window_items]
 
         # 检查 IDENTICAL_REPEAT：所有 key 相同

@@ -7,6 +7,7 @@ import os
 from typing import Any, Protocol
 
 from skill_registry import get_skills_description
+from task_parser import parse_instruction
 
 
 class LLMBackend(Protocol):
@@ -121,34 +122,48 @@ class OpenAIBackend:
 
 
 class RuleFallback:
-    """规则引擎回退：当 LLM 不可用时，执行预定义的 scan → pick → place → done 序列。"""
+    """规则引擎回退：按当前任务目标执行 scan → pick → place → done。"""
 
     def __init__(self) -> None:
         self._step = 0
 
     def chat(self, system: str, user: str) -> str:
-        decision = self._next_decision()
+        instruction = self._extract_instruction(user)
+        spec = parse_instruction(instruction)
+        if f"place{{'receptacle_type': '{spec.receptacle_type}'}} → 成功" in user:
+            decision = {
+                "thought": "放置已成功，请求验证任务状态",
+                "skill": "done",
+                "parameters": {},
+            }
+        elif f"当前持有: {spec.object_type}" in user:
+            decision = {
+                "thought": f"将目标物体放入 {spec.receptacle_type}",
+                "skill": "place",
+                "parameters": {"receptacle_type": spec.receptacle_type},
+            }
+        elif "scan{} → 成功" not in user:
+            decision = {
+                "thought": "先扫描环境了解可用物体",
+                "skill": "scan",
+                "parameters": {},
+            }
+        else:
+            decision = {
+                "thought": f"扫描完成后抓取 {spec.object_type}",
+                "skill": "pick",
+                "parameters": {"object_type": spec.object_type},
+            }
         self._step += 1
         return json.dumps(decision, ensure_ascii=False)
 
-    def _next_decision(self) -> dict[str, Any]:
-        decisions = [
-            {"thought": "先扫描环境了解可用物体", "skill": "scan", "parameters": {}},
-            {
-                "thought": "扫描完成后抓取目标物体",
-                "skill": "pick",
-                "parameters": {"object_type": "CreditCard"},
-            },
-            {
-                "thought": "将物体放入容器",
-                "skill": "place",
-                "parameters": {"receptacle_type": "Drawer"},
-            },
-            {"thought": "任务完成", "skill": "done", "parameters": {}},
-        ]
-        if self._step < len(decisions):
-            return decisions[self._step]
-        return {"thought": "已达最大步骤，强制终止", "skill": "done", "parameters": {}}
+    @staticmethod
+    def _extract_instruction(user_prompt: str) -> str:
+        marker = "## 任务指令\n\n"
+        if marker not in user_prompt:
+            raise ValueError("User Prompt 中缺少任务指令")
+        remainder = user_prompt.split(marker, 1)[1]
+        return remainder.split("\n\n## ", 1)[0].strip()
 
 
 def parse_decision(raw: str) -> dict[str, Any] | None:

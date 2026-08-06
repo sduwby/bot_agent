@@ -1,5 +1,7 @@
 """MemoryRecall 单元测试（不依赖 AI2-THOR）。"""
 
+from __future__ import annotations
+
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -52,7 +54,7 @@ class TestMemoryRecall:
         obs = _make_observation()
 
         query = recall.build_recall_query("把信用卡放进抽屉", obs, [])
-        assert query == "把信用卡放进抽屉"
+        assert query == "CreditCard Drawer"
 
     def test_build_recall_query_pick_failure(self, tmp_path: Path) -> None:
         store = self._make_store(tmp_path)
@@ -85,7 +87,16 @@ class TestMemoryRecall:
         ]
 
         query = recall.build_recall_query("把信用卡放进抽屉", obs, history)
-        assert query == "把信用卡放进抽屉"
+        assert query == "CreditCard Drawer"
+
+    def test_build_recall_query_held_object_targets_receptacle(self, tmp_path: Path) -> None:
+        store = self._make_store(tmp_path)
+        recall = MemoryRecall(store)
+        obs = _make_observation()
+        obs.held_object_types = ["CreditCard"]
+
+        query = recall.build_recall_query("把信用卡放进抽屉", obs, [])
+        assert query == "Drawer"
 
     def test_build_recall_query_no_history(self, tmp_path: Path) -> None:
         store = self._make_store(tmp_path)

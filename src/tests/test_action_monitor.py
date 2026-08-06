@@ -110,6 +110,17 @@ class TestDetectLoop:
         result = ActionMonitor.detect_loop(history)
         assert result.is_loop is False
 
+    def test_successful_pick_breaks_apparent_oscillation(self):
+        history = [
+            {"skill": "pick", "parameters": {"object_type": "Cup"}, "success": False},
+            {"skill": "move_to", "parameters": {"direction": "forward"}, "success": True},
+            {"skill": "pick", "parameters": {"object_type": "Cup"}, "success": True},
+        ]
+
+        result = ActionMonitor.detect_loop(history)
+
+        assert result.is_loop is False
+
 
 class TestLoopDetection:
     """测试 LoopDetection 数据类。"""

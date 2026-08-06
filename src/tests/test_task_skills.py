@@ -2,23 +2,25 @@
 
 from __future__ import annotations
 
-import sys
-import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 from io import StringIO
 from pathlib import Path
 
-# 在导入 task_skills 之前 mock 外部依赖，避免 ModuleNotFoundError。
-sys.modules["ai2thor"] = MagicMock()
-sys.modules["ai2thor.controller"] = MagicMock()
-
-mock_pil = MagicMock()
-sys.modules["PIL"] = mock_pil
-sys.modules["PIL.Image"] = mock_pil
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+import pytest
 
 from task_skills import SkillResult, SkillExecutor
+
+
+@pytest.fixture(autouse=True)
+def _stub_record_event(monkeypatch):
+    """单元测试只验证技能逻辑，不写真实图片文件。"""
+
+    def fake_record_event(
+        run_dir, trajectory_file, step, requested_action, event
+    ):
+        return {"step": step, "requested_action": requested_action}
+
+    monkeypatch.setattr("task_skills.record_event", fake_record_event)
 
 
 # ---------------------------------------------------------------------------

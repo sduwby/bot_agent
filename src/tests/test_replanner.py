@@ -76,6 +76,20 @@ class TestPlanRecovery:
         assert result.action == "scan"
         assert result.skill_name == "scan"
 
+    def test_repeated_scan_loop_moves_to_new_view(self):
+        rp = Replanner()
+        loop = LoopDetection(
+            is_loop=True,
+            loop_type="IDENTICAL_REPEAT",
+            window_size=3,
+            details="连续 3 步重复执行 scan{}",
+        )
+
+        result = rp.plan_recovery(loop_detection=loop)
+
+        assert result.action == "retry"
+        assert result.skill_name == "move_to"
+
     def test_unknown_category_goes_to_llm(self):
         """UNKNOWN → llm_decision。"""
         rp = Replanner()

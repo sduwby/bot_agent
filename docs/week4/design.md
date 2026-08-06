@@ -465,3 +465,21 @@ class AgentExecutor:
    → capture.observation_to_conversation(...)  → 完整 L0 记录
    → store.append_conversation(records)        → 写入 JSONL
 ```
+
+## 6. 实际偏差与修复设计（2026-08-06）
+
+初版实现完成了模块拆分，但端到端审计发现以下偏差：
+
+- L0 仅在主循环达到最大步数时写入，`done` 和搜索耗尽会提前返回并跳过捕获。
+- `should_search_for` 把“曾经见过目标”解释为“不需要搜索”，没有处理目标离开当前视野的情况。
+- `SearchStrategy` 虽记录已探索位置，但 `next_move` 没有使用当前位置和探索记录规避无效移动。
+- 搜索动作和自动恢复动作没有完整经过观察刷新、L1 捕获和轨迹记录流程。
+- `run_agent.py` 没有暴露设计中的 `--max-search-steps` 参数。
+
+本次修复采用以下约束：
+
+1. L0 写入移动到 `AgentExecutor.run()` 的统一 `finally` 收尾，所有终止路径都必须持久化。
+2. 搜索是否触发以“当前视野是否包含任务目标”为主要依据；历史记忆只作为提示，不阻止继续探索。
+3. `SearchStrategy.next_move(position)` 根据动作候选预测下一位置，优先选择未探索方向；搜索状态按任务目标独立重置。
+4. 搜索移动与普通 Planner 动作共用统一的动作后处理流程，确保观察、L1、失败教训和日志一致。
+5. CLI 暴露 `--max-search-steps`，E2E 必须断言目标状态并以退出码表达失败。

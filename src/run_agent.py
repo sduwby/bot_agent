@@ -10,6 +10,7 @@ from typing import Any
 
 from ai2thor.controller import Controller
 
+from env_config import load_local_env
 from executor import AgentExecutor
 from first_trajectory import create_run_dir
 
@@ -32,6 +33,12 @@ def parse_args() -> argparse.Namespace:
         help="运行产物的根目录",
     )
     parser.add_argument("--max-steps", type=int, default=20, help="最大循环步数")
+    parser.add_argument(
+        "--max-search-steps",
+        type=int,
+        default=8,
+        help="单个任务目标的最大搜索移动步数",
+    )
     parser.add_argument("--width", type=int, default=480, help="输出图像宽度")
     parser.add_argument("--height", type=int, default=360, help="输出图像高度")
     return parser.parse_args()
@@ -48,6 +55,7 @@ def write_summary(run_dir: Path, summary: dict[str, Any]) -> None:
 def main() -> int:
     """初始化环境、运行 Agent 循环、输出结果。"""
     args = parse_args()
+    load_local_env()
     run_dir = create_run_dir(args.output_root)
     trajectory_path = run_dir / "trajectory.jsonl"
     records: list[dict] = []
@@ -70,6 +78,7 @@ def main() -> int:
                 trajectory_file=trajectory_file,
                 records=records,
                 max_steps=args.max_steps,
+                max_search_steps=args.max_search_steps,
             )
             final_summary = agent.run(args.instruction)
     except Exception as exc:

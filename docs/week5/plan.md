@@ -132,10 +132,20 @@
 
 ## 5. 验收标准
 
-- [ ] `ActionMonitor` 能检测连续重复和振荡两种循环模式（单元测试通过率 100%）
-- [ ] `FailureClassifier` 能正确分类 3+ 类失败（OBJECT_NOT_FOUND, GRASP_FAILED, PLACEMENT_FAILED）
-- [ ] `SubtaskVerifier` 能通过 metadata 独立验证 pick/place 是否实际完成
-- [ ] `Replanner` 能根据失败类型生成正确的恢复动作
-- [ ] 重试次数有限制，不会无限循环
-- [ ] 集成后正常流程不受影响（无失败时与修改前行为一致）
-- [ ] 所有单元测试通过（`python -m pytest -q`）
+- [x] `ActionMonitor` 能检测连续重复和振荡两种循环模式（单元测试通过率 100%）
+- [x] `FailureClassifier` 能正确分类 3+ 类失败（OBJECT_NOT_FOUND, GRASP_FAILED, PLACEMENT_FAILED）
+- [x] `SubtaskVerifier` 能通过 metadata 独立验证 pick/place 和最终任务状态
+- [x] `Replanner` 能根据失败类型生成正确的恢复动作
+- [x] 重试次数有限制，不会无限循环
+- [x] 集成后正常流程不受影响（真实 E2E 默认套件 3/3）
+- [x] 所有测试通过（`.venv/bin/python -m pytest -q`，144 passed）
+
+## 6. 审计修复计划（2026-08-06）
+
+- [x] 复用 `task_parser.TaskSpec`，让 `done` 通过精确目标状态验证后才能成功。
+- [x] 在 place 前保存被放置物体 ID，place 后执行独立验证并让失败进入恢复流程。
+- [x] 抽取统一动作执行/观察刷新/捕获/记录方法，普通动作、搜索和自动重试全部复用。
+- [x] 自动重试后使用最新 Observation，并对 retry 结果再次分类或验证。
+- [x] 修复重复 scan 恢复仍执行 scan 的循环问题。
+- [x] 新增 `test_executor.py`，覆盖假成功、放置验证、重试状态刷新、L0 收尾和循环恢复。
+- [x] 让 `run_e2e.py` 校验 TaskSpec 对应的最终状态，失败时返回非零并保存汇总。

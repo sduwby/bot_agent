@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from task_parser import parse_instruction
+
 
 @dataclass
 class VerificationResult:
@@ -120,44 +122,69 @@ class SubtaskVerifier:
     def verify_task_complete(
         instruction: str,
         metadata: dict[str, Any],
+        object_type: str | None = None,
+        receptacle_type: str | None = None,
+        object_id: str | None = None,
     ) -> VerificationResult:
-        """综合验证任务是否完成。
+        """精确验证目标类型物体是否位于目标类型容器中。"""
+        if not object_type or not receptacle_type:
+            try:
+                spec = parse_instruction(instruction)
+            except ValueError as exc:
+                return VerificationResult(
+                    success=False,
+                    confidence=0.0,
+                    details=f"无法解析任务目标: {exc}",
+                )
+            object_type = spec.object_type
+            receptacle_type = spec.receptacle_type
 
-        对于"把 X 放进 Y"类型指令，验证 X 是否在 Y 内。
-        这是一个简化实现，通过检查 inventoryObjects 和 objects 状态来判断。
-
-        策略：
-        - inventoryObjects 为空（物体已释放）
-        - 存在物体的 parentReceptacles 非空（物体在某个容器内）
-        """
         inventory = metadata.get("inventoryObjects", [])
         objects = metadata.get("objects", [])
 
-        # 如果还持有物体，任务未完成
-        if inventory:
-            held_types = [obj.get("objectType", "") for obj in inventory]
+        held_target_ids = {
+            obj.get("objectId", "")
+            for obj in inventory
+            if obj.get("objectType", "").casefold() == object_type.casefold()
+        }
+        if object_id:
+            held_target_ids &= {object_id}
+        if held_target_ids:
             return VerificationResult(
                 success=False,
-                confidence=0.8,
-                details=f"仍持有 {held_types}，任务可能未完成",
+                confidence=1.0,
+                details=f"目标物体仍在手中: {sorted(held_target_ids)}",
             )
 
-        # 检查是否有物体在容器中
-        placed_objects = []
-        for obj in objects:
-            parent_ids = obj.get("parentReceptacles") or []
-            if parent_ids:
-                placed_objects.append(obj.get("objectType", "?"))
-
-        if placed_objects:
-            return VerificationResult(
-                success=True,
-                confidence=0.8,
-                details=f"检测到已放置物体: {placed_objects}，任务可能已完成",
-            )
+        receptacle_ids = {
+            obj.get("objectId", "")
+            for obj in objects
+            if obj.get("objectType", "").casefold() == receptacle_type.casefold()
+        }
+        candidates = [
+            obj
+            for obj in objects
+            if obj.get("objectType", "").casefold() == object_type.casefold()
+            and (object_id is None or obj.get("objectId") == object_id)
+        ]
+        for candidate in candidates:
+            matching_parents = set(candidate.get("parentReceptacles") or []) & receptacle_ids
+            if matching_parents:
+                return VerificationResult(
+                    success=True,
+                    confidence=1.0,
+                    details=(
+                        f"{candidate.get('objectId')} 已位于 {receptacle_type} "
+                        f"{sorted(matching_parents)} 内"
+                    ),
+                )
 
         return VerificationResult(
             success=False,
-            confidence=0.5,
-            details="未持有物体且未发现容器内有物体，任务状态不确定",
+            confidence=1.0,
+            details=(
+                f"未发现 {object_type}"
+                + (f"({object_id})" if object_id else "")
+                + f" 位于 {receptacle_type} 内"
+            ),
         )

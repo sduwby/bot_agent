@@ -144,7 +144,7 @@ class TestVerifyTaskComplete:
         }
         result = SubtaskVerifier.verify_task_complete("把信用卡放进抽屉", metadata)
         assert result.success is False
-        assert "仍持有" in result.details
+        assert "仍在手中" in result.details
 
     def test_task_unknown_no_object_placed(self):
         """未持有物体且无容器内物体 → 不确定。"""
@@ -156,7 +156,26 @@ class TestVerifyTaskComplete:
         }
         result = SubtaskVerifier.verify_task_complete("把信用卡放进抽屉", metadata)
         assert result.success is False
-        assert result.confidence < 1.0
+        assert result.confidence == 1.0
+
+    def test_unrelated_placed_object_does_not_complete_task(self):
+        metadata = {
+            "inventoryObjects": [],
+            "objects": [
+                {
+                    "objectId": "apple_0",
+                    "objectType": "Apple",
+                    "parentReceptacles": ["drawer_0"],
+                },
+                {"objectId": "drawer_0", "objectType": "Drawer"},
+            ],
+        }
+
+        result = SubtaskVerifier.verify_task_complete(
+            "把信用卡放进抽屉", metadata
+        )
+
+        assert result.success is False
 
 
 class TestVerificationResult:

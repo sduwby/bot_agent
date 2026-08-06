@@ -24,10 +24,11 @@ from memory_capture import MemoryCapture
 from memory_recall import MemoryRecall
 from memory_store import MemoryStore, SearchStrategy
 from observation import Observation, build_observation, summarize
-from replanner import Replanner
+from replanner import RecoveryAction, Replanner
 from skill_registry import get_skills_description, validate_parameters
+from task_parser import TaskSpec, parse_instruction
 from task_skills import SkillExecutor, SkillResult
-from verifier import SubtaskVerifier
+from verifier import SubtaskVerifier, VerificationResult
 
 
 class AgentExecutor:
@@ -69,200 +70,379 @@ class AgentExecutor:
         self.classifier = FailureClassifier()
         self.verifier = SubtaskVerifier()
         self.replanner = Replanner()
+        self._pending_recovery: dict[str, Any] | None = None
+        self._search_target_type: str | None = None
+        self._search_probe_pending = False
+        self._target_object_id: str | None = None
+        self._task_spec: TaskSpec | None = None
+        self._final_verification: VerificationResult | None = None
+        self._l0_written = False
 
     def run(self, instruction: str) -> dict[str, Any]:
         """执行一次完整的 Agent 循环，返回任务摘要。"""
-        self.skills.record_initial_observation()
-        obs = build_observation(self.controller.last_event.metadata)
-        self._observations.append(obs)
-        obs_summary = summarize(obs)
+        try:
+            try:
+                self._task_spec = parse_instruction(instruction)
+            except ValueError as exc:
+                return self._build_summary(
+                    instruction, False, f"任务解析失败: {exc}"
+                )
 
-        # 初始捕获：记录初始观察
-        initial_memories = self.capture.extract_memories_from_observation(obs, 0)
-        for m in initial_memories:
-            self.store.append_memory(m)
-        self.search.record_explored_position(obs.position, obs.rotation_y, 0)
+            self.skills.record_initial_observation()
+            obs = build_observation(self.controller.last_event.metadata)
+            self._observations.append(obs)
+            obs_summary = summarize(obs)
+            self._capture_observation(obs, 0)
+            self.search.record_explored_position(obs.position, obs.rotation_y, 0)
 
-        for step in range(self.max_steps):
-            # 循环检测：检查是否陷入重复模式
-            loop = self.monitor.detect_loop(self.action_history)
-            if loop.is_loop and not self.searching:
-                recovery = self.replanner.plan_recovery(loop_detection=loop)
-                recovery_result = self._execute_skill(recovery.skill_name or "scan", recovery.params or {})
+            while len(self.action_history) < self.max_steps:
+                step = len(self.action_history)
+                decision: dict[str, Any] | None = None
+                user_prompt = build_user_prompt(
+                    instruction, obs_summary, self.action_history
+                )
+                raw_response = ""
+
+                if self._pending_recovery is not None:
+                    decision = self._pending_recovery
+                    self._pending_recovery = None
+                    raw_response = f"[自动恢复] {decision.get('thought', '')}"
+
+                elif self.searching:
+                    if self._target_visible(obs, self._search_target_type):
+                        self.searching = False
+                    elif self._search_probe_pending:
+                        decision = self._build_search_probe_decision()
+                        self._search_probe_pending = False
+                        raw_response = (
+                            f"[搜索探测] {decision.get('thought', '')}"
+                        )
+                    else:
+                        decision = self.search.next_move(obs.position, obs.rotation_y)
+                        if decision["skill"] == "done":
+                            return self._build_summary(
+                                instruction, False, "搜索耗尽"
+                            )
+                        raw_response = f"[搜索模式] {decision.get('thought', '')}"
+
+                if decision is None:
+                    loop = self.monitor.detect_loop(self.action_history)
+                    if loop.is_loop:
+                        recovery = self.replanner.plan_recovery(
+                            loop_detection=loop
+                        )
+                        decision = {
+                            "thought": recovery.reason,
+                            "skill": recovery.skill_name or "scan",
+                            "parameters": recovery.params or {},
+                        }
+                        raw_response = f"[循环恢复] {loop.details}"
+
+                if decision is None:
+                    recall_query = self.recall.build_recall_query(
+                        instruction, obs, self.action_history
+                    )
+                    recalled = self.recall.recall(recall_query, limit=5)
+                    memory_context = self.recall.inject_into_prompt(recalled)
+                    user_prompt = build_user_prompt(
+                        instruction,
+                        obs_summary,
+                        self.action_history,
+                        memory_context=memory_context,
+                    )
+                    raw_response = self.backend.chat(
+                        self.system_prompt, user_prompt
+                    )
+                    decision = parse_decision(raw_response)
+
+                if decision is None:
+                    self._record_step(
+                        step,
+                        user_prompt,
+                        raw_response,
+                        None,
+                        None,
+                        "决策解析失败",
+                    )
+                    return self._build_summary(
+                        instruction, False, "决策解析失败"
+                    )
+
+                skill_name = decision["skill"]
+                params = decision.get("parameters", {})
+                param_error = validate_parameters(skill_name, params)
+                if param_error:
+                    self._record_step(
+                        step,
+                        user_prompt,
+                        raw_response,
+                        decision,
+                        None,
+                        param_error,
+                    )
+                    self.action_history.append({
+                        "skill": skill_name,
+                        "parameters": params,
+                        "success": False,
+                        "result_summary": param_error,
+                    })
+                    obs_summary = self._append_error_to_summary(
+                        summarize(obs), param_error
+                    )
+                    continue
+
+                if skill_name == "done":
+                    self._final_verification = self._verify_task(instruction)
+                    details = self._final_verification.details
+                    self._record_step(
+                        step,
+                        user_prompt,
+                        raw_response,
+                        decision,
+                        None,
+                        details,
+                    )
+                    if self._final_verification.success:
+                        return self._build_summary(
+                            instruction, True, "任务状态验证通过"
+                        )
+                    self.action_history.append({
+                        "skill": "done",
+                        "parameters": {},
+                        "success": False,
+                        "result_summary": f"任务验证失败: {details}",
+                    })
+                    obs_summary = self._append_error_to_summary(
+                        summarize(obs), f"任务验证失败: {details}"
+                    )
+                    continue
+
+                placed_object_id = None
+                if skill_name == "place":
+                    held_ids = inventory_object_ids(
+                        self.controller.last_event.metadata
+                    )
+                    placed_object_id = held_ids[0] if held_ids else None
+
+                result = self._execute_skill(skill_name, params)
                 obs = build_observation(self.controller.last_event.metadata)
-                self._observations.append(obs)
-                obs_summary = summarize(obs)
-                loop_summary = f"[循环恢复] {recovery.reason}"
-                self.action_history.append({
-                    "skill": recovery.skill_name or "scan",
-                    "parameters": recovery.params or {},
-                    "success": recovery_result.success,
-                    "result_summary": loop_summary,
-                })
-                self._record_step(step, "", loop_summary, {"skill": recovery.skill_name or "scan", "parameters": recovery.params or {}, "thought": loop.details}, recovery_result, loop_summary)
-                continue
-
-            # 搜索模式：使用 SearchStrategy 替代 LLM 决策
-            if self.searching:
-                search_decision = self.search.next_move()
-                if search_decision["skill"] == "done":
-                    return self._build_summary(instruction, False, "搜索耗尽")
-                decision = search_decision
-                user_prompt = build_user_prompt(
-                    instruction, obs_summary, self.action_history,
-                    memory_context=None,
+                verification = self._verify_skill_result(
+                    skill_name, params, result, placed_object_id
                 )
-                raw_response = f"[搜索模式] {search_decision.get('thought', '')}"
-            else:
-                # 记忆召回：在 LLM 决策前注入相关记忆
-                recall_query = self.recall.build_recall_query(
-                    instruction, obs, self.action_history
+                if verification is not None and not verification.success:
+                    result = SkillResult(
+                        success=False,
+                        data={
+                            **result.data,
+                            "verification": asdict(verification),
+                        },
+                        failure_reason=f"验证失败: {verification.details}",
+                    )
+
+                if result.success and skill_name == "pick":
+                    target = result.data.get("target", {})
+                    self._target_object_id = target.get("object_id")
+                    if not self._target_object_id:
+                        held = inventory_object_ids(
+                            self.controller.last_event.metadata
+                        )
+                        self._target_object_id = held[0] if held else None
+
+                result_summary = (
+                    "成功"
+                    if result.success
+                    else (result.failure_reason or "失败")
                 )
-                recalled = self.recall.recall(recall_query, limit=5)
-                memory_context = self.recall.inject_into_prompt(recalled)
+                if verification is not None:
+                    result_summary += f"；验证: {verification.details}"
 
-                user_prompt = build_user_prompt(
-                    instruction, obs_summary, self.action_history,
-                    memory_context=memory_context,
-                )
-                raw_response = self.backend.chat(self.system_prompt, user_prompt)
-                decision = parse_decision(raw_response)
-
-            if decision is None:
-                self._record_step(step, user_prompt, raw_response, None, None, "决策解析失败")
-                break
-
-            skill_name = decision["skill"]
-            params = decision.get("parameters", {})
-            param_error = validate_parameters(skill_name, params)
-            if param_error:
-                self._record_step(step, user_prompt, raw_response, decision, None, param_error)
-                obs_summary = self._append_error_to_summary(obs_summary, param_error)
                 self.action_history.append({
                     "skill": skill_name,
                     "parameters": params,
-                    "success": False,
-                    "result_summary": param_error,
+                    "success": result.success,
+                    "result_summary": result_summary,
                 })
-                continue
-
-            if skill_name == "done":
-                self._record_step(step, user_prompt, raw_response, decision, None, "任务完成")
-                return self._build_summary(instruction, True, "done")
-
-            result = self._execute_skill(skill_name, params)
-            result_summary = "成功" if result.success else (result.failure_reason or "失败")
-
-            self._record_step(step, user_prompt, raw_response, decision, result, result_summary)
-            self.action_history.append({
-                "skill": skill_name,
-                "parameters": params,
-                "success": result.success,
-                "result_summary": result_summary,
-            })
-
-            # 更新观察
-            obs = build_observation(self.controller.last_event.metadata)
-            self._observations.append(obs)
-
-            # 捕获：提取并写入 L1 记忆
-            step_memories = self.capture.extract_memories_from_observation(obs, step)
-            for m in step_memories:
-                self.store.append_memory(m)
-
-            if not result.success:
-                # 失败时记录教训
-                failure_memory = self.capture.extract_failure_memory(
-                    skill_name, params, result.failure_reason or "未知原因", step, obs.scene_name
+                self._record_step(
+                    step,
+                    user_prompt,
+                    raw_response,
+                    decision,
+                    result,
+                    result_summary,
                 )
-                self.store.append_memory(failure_memory)
-
+                self._observations.append(obs)
+                self._capture_observation(obs, step + 1)
+                self.search.record_explored_position(
+                    obs.position, obs.rotation_y, step + 1
+                )
                 obs_summary = summarize(obs)
-                obs_summary = self._append_error_to_summary(obs_summary, result.failure_reason or "")
 
-                # [新增] 失败分类 + 自动恢复
-                failure = self.classifier.classify_failure(
-                    skill_name, params, result.failure_reason or "未知"
-                )
-                recovery = self.replanner.plan_recovery(failure_info=failure)
-
-                if recovery.action == "retry" and recovery.skill_name:
-                    # 自动重试
-                    retry_result = self._execute_skill(recovery.skill_name, recovery.params or params)
-                    result_summary = f"[自动重试] {recovery.reason} → {'成功' if retry_result.success else '失败'}"
-                    self.action_history.append({
-                        "skill": recovery.skill_name,
-                        "parameters": recovery.params or params,
-                        "success": retry_result.success,
-                        "result_summary": result_summary,
-                    })
-                    if retry_result.success:
+                if result.success:
+                    self.replanner.record_success(skill_name)
+                    if self.searching and skill_name == "move_to":
+                        self._search_probe_pending = True
+                    if self._target_visible(obs, self._search_target_type):
                         self.searching = False
-                        self.search.record_explored_position(obs.position, obs.rotation_y, step)
-                        obs_summary = summarize(obs)
-                        continue
-
-                elif recovery.action == "scan":
-                    # 自动 scan 重新观察
-                    scan_result = self._execute_skill("scan", {})
-                    result_summary = f"[自动恢复] {recovery.reason}"
-                    self.action_history.append({
-                        "skill": "scan",
-                        "parameters": {},
-                        "success": scan_result.success,
-                        "result_summary": result_summary,
-                    })
-                    obs = build_observation(self.controller.last_event.metadata)
-                    self._observations.append(obs)
-                    obs_summary = summarize(obs)
+                    if skill_name in {"pick", "place"}:
+                        self.searching = False
+                        self._search_probe_pending = False
+                        self._search_target_type = None
+                        self.search.reset(clear_explored=False)
                     continue
 
-                elif recovery.action == "abort":
-                    # 超过重试次数，交由 LLM 决策
-                    obs_summary = self._append_error_to_summary(obs_summary, f"[恢复中止] {recovery.reason}")
-
-                # 如果 pick 或 place 失败，检查是否进入搜索模式
-                if not self.searching:
-                    target_type = params.get("object_type") or params.get("receptacle_type")
-                    if target_type and self.search.should_search_for(target_type):
-                        self.searching = True
-                        continue
-                continue
-
-            # 成功后退出搜索模式
-            self.searching = False
-
-            # [新增] 成功后二次验证
-            if skill_name == "pick":
-                verified = self.verifier.verify_pick(
-                    self.controller.last_event.metadata, params.get("object_type", "")
-                )
-                if not verified.success:
-                    obs_summary = self._append_error_to_summary(obs_summary, f"[验证警告] {verified.details}")
-
-            elif skill_name == "place":
-                held_ids = inventory_object_ids(self.controller.last_event.metadata)
-                if held_ids:
-                    verified = self.verifier.verify_place(
-                        self.controller.last_event.metadata, held_ids[0], params.get("receptacle_type", "")
+                failure_reason = result.failure_reason or "未知原因"
+                self.store.append_memory(
+                    self.capture.extract_failure_memory(
+                        skill_name,
+                        params,
+                        failure_reason,
+                        step + 1,
+                        obs.scene_name,
                     )
-                    if not verified.success:
-                        obs_summary = self._append_error_to_summary(obs_summary, f"[验证警告] {verified.details}")
+                )
+                obs_summary = self._append_error_to_summary(
+                    obs_summary, failure_reason
+                )
+                failure = self.classifier.classify_failure(
+                    skill_name, params, failure_reason
+                )
+                recovery = self.replanner.plan_recovery(
+                    failure_info=failure
+                )
+                self._apply_recovery(recovery, params)
 
-            # 记录探索位置
-            self.search.record_explored_position(obs.position, obs.rotation_y, step)
+            self._final_verification = self._verify_task(instruction)
+            if self._final_verification.success:
+                return self._build_summary(
+                    instruction, True, "达到步骤上限时任务状态验证通过"
+                )
+            return self._build_summary(
+                instruction, False, "达到最大步骤数"
+            )
+        finally:
+            self._persist_l0(instruction)
 
-            obs_summary = summarize(obs)
+    def _capture_observation(self, obs: Observation, step: int) -> None:
+        """把最新观察完整写入 L1。"""
+        for memory in self.capture.extract_memories_from_observation(obs, step):
+            self.store.append_memory(memory)
 
-        # 任务结束后：写入完整 L0 记录
-        conv_records = self.capture.observation_to_conversation(
-            instruction, self.session_key, self._observations, self.action_history
+    def _verify_skill_result(
+        self,
+        skill_name: str,
+        params: dict[str, Any],
+        result: SkillResult,
+        placed_object_id: str | None,
+    ) -> VerificationResult | None:
+        """在技能报告成功后使用最新 metadata 做独立状态验证。"""
+        if not result.success:
+            return None
+        metadata = self.controller.last_event.metadata
+        if skill_name == "pick":
+            return self.verifier.verify_pick(
+                metadata, params.get("object_type", "")
+            )
+        if skill_name == "place":
+            if not placed_object_id:
+                return VerificationResult(
+                    success=False,
+                    confidence=1.0,
+                    details="放置前未记录到持有物体 ID",
+                )
+            return self.verifier.verify_place(
+                metadata,
+                placed_object_id,
+                params.get("receptacle_type", ""),
+            )
+        return None
+
+    def _verify_task(self, instruction: str) -> VerificationResult:
+        """按解析后的任务目标验证最终环境状态。"""
+        if self._task_spec is None:
+            return VerificationResult(
+                success=False,
+                confidence=0.0,
+                details="任务目标尚未解析",
+            )
+        return self.verifier.verify_task_complete(
+            instruction,
+            self.controller.last_event.metadata,
+            object_type=self._task_spec.object_type,
+            receptacle_type=self._task_spec.receptacle_type,
+            object_id=self._target_object_id,
         )
-        for cr in conv_records:
-            self.store.append_conversation(cr)
 
-        # 达到最大步骤数
-        return self._build_summary(instruction, False, "达到最大步骤数")
+    @staticmethod
+    def _target_visible(
+        obs: Observation,
+        target_type: str | None,
+    ) -> bool:
+        """判断当前视野是否已出现正在搜索的物体或容器类型。"""
+        if not target_type:
+            return False
+        target = target_type.casefold()
+        visible_types = {
+            item["object_type"].casefold()
+            for item in obs.visible_pickupable + obs.visible_receptacles
+        }
+        return target in visible_types
+
+    def _apply_recovery(
+        self,
+        recovery: RecoveryAction,
+        failed_params: dict[str, Any],
+    ) -> None:
+        """把恢复计划转换为下一轮统一执行的决策或搜索状态。"""
+        if recovery.action == "search":
+            target_type = (
+                failed_params.get("object_type")
+                or failed_params.get("receptacle_type")
+            )
+            if target_type and target_type != self._search_target_type:
+                self.search.reset(clear_explored=False)
+            self._search_target_type = target_type
+            self.searching = bool(target_type)
+            self._search_probe_pending = False
+            return
+        if recovery.action in {"retry", "scan"} and recovery.skill_name:
+            self._pending_recovery = {
+                "thought": recovery.reason,
+                "skill": recovery.skill_name,
+                "parameters": recovery.params or failed_params,
+            }
+
+    def _build_search_probe_decision(self) -> dict[str, Any]:
+        """移动后用目标技能的 360 度扫描确认是否已经到达可交互范围。"""
+        if (
+            self._task_spec is not None
+            and self._search_target_type == self._task_spec.receptacle_type
+        ):
+            return {
+                "thought": f"全向探测容器 {self._search_target_type}",
+                "skill": "place",
+                "parameters": {
+                    "receptacle_type": self._search_target_type,
+                },
+            }
+        return {
+            "thought": f"全向探测物体 {self._search_target_type}",
+            "skill": "pick",
+            "parameters": {"object_type": self._search_target_type},
+        }
+
+    def _persist_l0(self, instruction: str) -> None:
+        """在任意终止路径写入一次完整 L0 对话。"""
+        if self._l0_written:
+            return
+        records = self.capture.observation_to_conversation(
+            instruction,
+            self.session_key,
+            self._observations,
+            self.action_history,
+        )
+        for record in records:
+            self.store.append_conversation(record)
+        self._l0_written = True
 
     def _execute_skill(self, skill_name: str, params: dict[str, Any]) -> SkillResult:
         """根据技能名称调用对应的 SkillExecutor 方法。"""
@@ -365,8 +545,14 @@ class AgentExecutor:
         held = inventory_object_ids(self.controller.last_event.metadata)
         return {
             "instruction": instruction,
+            "task": asdict(self._task_spec) if self._task_spec else None,
             "task_success": task_success,
             "termination_reason": termination_reason,
+            "final_verification": (
+                asdict(self._final_verification)
+                if self._final_verification
+                else None
+            ),
             "steps_taken": len(self.action_history),
             "action_history": self.action_history,
             "final_held_object_ids": held,

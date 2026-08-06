@@ -75,6 +75,13 @@ class FailureClassifier:
             )
 
         if skill_name == "place":
+            if any(kw in reason_lower for kw in _NOT_FOUND_KEYWORDS):
+                return FailureInfo(
+                    category=FailureCategory.OBJECT_NOT_FOUND,
+                    skill_name=skill_name,
+                    params=params,
+                    original_reason=failure_reason,
+                )
             return FailureInfo(
                 category=FailureCategory.PLACEMENT_FAILED,
                 skill_name=skill_name,
