@@ -194,6 +194,7 @@ class SkillExecutor:
                 "receptacle": receptacle,
                 "open_action_success": None,
                 "put_action_success": False,
+                "forced_put_action_success": None,
                 "close_action_success": None,
                 "placement_verified": False,
                 "error_message": None,
@@ -230,6 +231,28 @@ class SkillExecutor:
                 object_id,
                 receptacle["object_id"],
             )
+            if (
+                not attempt["placement_verified"]
+                and attempt["error_message"]
+                == "No valid positions to place object found"
+            ):
+                forced_event = self.act({
+                    "action": "PutObject",
+                    "objectId": receptacle["object_id"],
+                    "forceAction": True,
+                })
+                attempt["forced_put_action_success"] = (
+                    forced_event.metadata.get("lastActionSuccess")
+                )
+                attempt["error_message"] = (
+                    forced_event.metadata.get("errorMessage") or None
+                )
+                attempt["placement_verified"] = self._placement_verified(
+                    forced_event,
+                    object_id,
+                    receptacle["object_id"],
+                )
+                put_event = forced_event
             if not attempt["placement_verified"]:
                 # 放置失败后恢复本次主动打开的容器，避免影响后续候选或下一次任务。
                 if opened_by_this_attempt:

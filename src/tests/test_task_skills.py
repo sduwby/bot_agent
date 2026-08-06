@@ -288,3 +288,81 @@ class TestSkillExecutorRecordInitialObservation:
         assert len(records) == 1
         assert records[0]["step"] == 0
         assert records[0]["requested_action"]["action"] == "Initialize"
+
+
+class TestSkillExecutorPlaceFallback:
+    def test_force_action_only_after_no_valid_positions(self) -> None:
+        apple_id = "Apple_0"
+        microwave_id = "Microwave_0"
+        apple = {
+            "objectId": apple_id,
+            "objectType": "Apple",
+            "visible": True,
+            "pickupable": True,
+            "parentReceptacles": [],
+        }
+        microwave = {
+            "objectId": microwave_id,
+            "objectType": "Microwave",
+            "visible": True,
+            "receptacle": True,
+            "openable": False,
+            "isOpen": True,
+            "receptacleObjectIds": [],
+        }
+        executor, controller, _, _ = _make_executor(
+            objects=[apple, microwave],
+            inventory_objects=[
+                {"objectId": apple_id, "objectType": "Apple"}
+            ],
+        )
+        executor.scan_receptacles = lambda excluded: [{
+            "object_id": microwave_id,
+            "object_type": "Microwave",
+            "distance": 1.0,
+            "rotation_y": 0.0,
+            "openable": False,
+        }]
+        executor.rotate_to = lambda rotation: None
+        calls: list[dict] = []
+
+        def act(action: dict):
+            calls.append(action)
+            if action.get("forceAction"):
+                apple["parentReceptacles"] = [microwave_id]
+                microwave["receptacleObjectIds"] = [apple_id]
+                metadata = _make_metadata(
+                    objects=[apple, microwave],
+                    inventory_objects=[],
+                    last_action_success=True,
+                )
+            else:
+                metadata = _make_metadata(
+                    objects=[apple, microwave],
+                    inventory_objects=[
+                        {"objectId": apple_id, "objectType": "Apple"}
+                    ],
+                    last_action_success=False,
+                    error_message="No valid positions to place object found",
+                )
+            event = _make_event(metadata)
+            controller.last_event = event
+            return event
+
+        executor.act = act
+
+        result = executor.place(apple_id, "Microwave", set())
+
+        assert result.success is True
+        assert calls == [
+            {"action": "PutObject", "objectId": microwave_id},
+            {
+                "action": "PutObject",
+                "objectId": microwave_id,
+                "forceAction": True,
+            },
+        ]
+        attempt = result.data["attempts"][0]
+        assert attempt["put_action_success"] is False
+        assert attempt["forced_put_action_success"] is True
+        assert attempt["placement_verified"] is True

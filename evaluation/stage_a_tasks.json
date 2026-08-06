@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "name": "阶段 A 固定批量评测任务集",
+  "tasks": [
+    {
+      "id": "a01",
+      "name": "信用卡放入抽屉",
+      "scene": "FloorPlan1",
+      "instruction": "把信用卡放进抽屉",
+      "tags": ["direct", "openable_receptacle"]
+    },
+    {
+      "id": "a02",
+      "name": "苹果放到台面",
+      "scene": "FloorPlan1",
+      "instruction": "把苹果放到台面",
+      "tags": ["direct", "open_receptacle"]
+    },
+    {
+      "id": "a03",
+      "name": "杯子放到台面",
+      "scene": "FloorPlan1",
+      "instruction": "把杯子放到台面",
+      "tags": ["search", "open_receptacle"]
+    },
+    {
+      "id": "a04",
+      "name": "书本放到台面",
+      "scene": "FloorPlan1",
+      "instruction": "把书本放到台面",
+      "tags": ["search", "open_receptacle"]
+    },
+    {
+      "id": "a05",
+      "name": "苹果放入微波炉",
+      "scene": "FloorPlan2",
+      "instruction": "把苹果放进微波炉",
+      "tags": ["search", "openable_receptacle"]
+    },
+    {
+      "id": "a06",
+      "name": "杯子放入柜子",
+      "scene": "FloorPlan2",
+      "instruction": "把杯子放进柜子",
+      "tags": ["search", "openable_receptacle"]
+    },
+    {
+      "id": "a07",
+      "name": "苹果放入垃圾桶",
+      "scene": "FloorPlan3",
+      "instruction": "把苹果放进垃圾桶",
+      "tags": ["search", "open_receptacle"]
+    },
+    {
+      "id": "a08",
+      "name": "杯子放入抽屉",
+      "scene": "FloorPlan3",
+      "instruction": "把杯子放进抽屉",
+      "tags": ["search", "openable_receptacle"]
+    },
+    {
+      "id": "a09",
+      "name": "苹果放入微波炉回归",
+      "scene": "FloorPlan4",
+      "instruction": "把苹果放进微波炉",
+      "tags": ["search", "openable_receptacle"]
+    },
+    {
+      "id": "a10",
+      "name": "杯子放入柜子回归",
+      "scene": "FloorPlan4",
+      "instruction": "把杯子放进柜子",
+      "tags": ["search", "openable_receptacle"]
+    },
+    {
+      "id": "a11",
+      "name": "跨场景杯子放台面",
+      "scene": "FloorPlan6",
+      "instruction": "把杯子放到台面",
+      "tags": ["search", "open_receptacle"]
+    },
+    {
+      "id": "a12",
+      "name": "跨场景信用卡放抽屉",
+      "scene": "FloorPlan10",
+      "instruction": "把信用卡放进抽屉",
+      "tags": ["search", "openable_receptacle"]
+    }
+  ]
+}

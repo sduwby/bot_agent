@@ -73,10 +73,22 @@ class AgentExecutor:
         self._pending_recovery: dict[str, Any] | None = None
         self._search_target_type: str | None = None
         self._search_probe_pending = False
+        self._search_force_move = False
+        self._reachable_positions_loaded = False
+        self._inspected_search_containers: set[str] = set()
+        self._search_target_horizon_delta = 0
+        self._known_receptacle_viewpoints: dict[
+            str, list[dict[str, float]]
+        ] = {}
+        self._used_receptacle_viewpoints: set[
+            tuple[str, float, float]
+        ] = set()
         self._target_object_id: str | None = None
         self._task_spec: TaskSpec | None = None
         self._final_verification: VerificationResult | None = None
         self._l0_written = False
+        self.planner_calls = 0
+        self.llm_calls = 0
 
     def run(self, instruction: str) -> dict[str, Any]:
         """执行一次完整的 Agent 循环，返回任务摘要。"""
@@ -109,9 +121,32 @@ class AgentExecutor:
                     raw_response = f"[自动恢复] {decision.get('thought', '')}"
 
                 elif self.searching:
-                    if self._target_visible(obs, self._search_target_type):
+                    self._ensure_reachable_positions()
+                    if self._search_force_move:
+                        preferred = self._next_known_receptacle_viewpoint(
+                            obs.position
+                        )
+                        decision = self.search.next_move(
+                            obs.position,
+                            obs.rotation_y,
+                            preferred_position=preferred,
+                        )
+                        self._search_force_move = False
+                        if decision["skill"] == "done":
+                            return self._build_summary(
+                                instruction, False, "搜索耗尽"
+                            )
+                        raw_response = (
+                            f"[强制换位] {decision.get('thought', '')}"
+                        )
+                    elif self._target_visible(obs, self._search_target_type):
                         self.searching = False
                     elif self._search_probe_pending:
+                        self._inspect_visible_search_containers()
+                        obs = build_observation(
+                            self.controller.last_event.metadata
+                        )
+                        obs_summary = summarize(obs)
                         decision = self._build_search_probe_decision()
                         self._search_probe_pending = False
                         raw_response = (
@@ -150,6 +185,9 @@ class AgentExecutor:
                         self.action_history,
                         memory_context=memory_context,
                     )
+                    self.planner_calls += 1
+                    if getattr(self.backend, "counts_as_llm", False):
+                        self.llm_calls += 1
                     raw_response = self.backend.chat(
                         self.system_prompt, user_prompt
                     )
@@ -403,6 +441,9 @@ class AgentExecutor:
             self._search_target_type = target_type
             self.searching = bool(target_type)
             self._search_probe_pending = False
+            self._search_force_move = bool(
+                failed_params.get("receptacle_type")
+            )
             return
         if recovery.action in {"retry", "scan"} and recovery.skill_name:
             self._pending_recovery = {
@@ -430,6 +471,162 @@ class AgentExecutor:
             "parameters": {"object_type": self._search_target_type},
         }
 
+    def _inspect_visible_search_containers(self) -> None:
+        """搜索抓取目标时打开当前可交互的关闭容器。"""
+        if (
+            self._task_spec is None
+            or self._search_target_type is None
+            or self._search_target_type.casefold()
+            != self._task_spec.object_type.casefold()
+        ):
+            return
+        candidates = self.skills.scan_receptacles(set())
+        self._remember_receptacle_viewpoints(candidates)
+        for candidate in candidates:
+            if not candidate.get("openable") or candidate.get("distance", 99) > 1.5:
+                continue
+            object_id = candidate["object_id"]
+            if object_id in self._inspected_search_containers:
+                continue
+            metadata = next(
+                (
+                    item
+                    for item in self.controller.last_event.metadata.get(
+                        "objects", []
+                    )
+                    if item.get("objectId") == object_id
+                ),
+                None,
+            )
+            if (
+                metadata is None
+                or metadata.get("isOpen", False)
+            ):
+                continue
+            self.skills.rotate_to(candidate["rotation_y"])
+            latest = next(
+                (
+                    item
+                    for item in self.controller.last_event.metadata.get(
+                        "objects", []
+                    )
+                    if item.get("objectId") == object_id
+                ),
+                {},
+            )
+            if not latest.get("visible", False) or latest.get("isOpen", False):
+                continue
+            open_event = self.skills.act({
+                "action": "OpenObject",
+                "objectId": object_id,
+            })
+            if open_event.metadata.get("lastActionSuccess") is not True:
+                continue
+            self._inspected_search_containers.add(object_id)
+            if self._scan_search_target():
+                return
+            latest = next(
+                (
+                    item
+                    for item in self.controller.last_event.metadata.get(
+                        "objects", []
+                    )
+                    if item.get("objectId") == object_id
+                ),
+                {},
+            )
+            if latest.get("visible", False) and latest.get("isOpen", False):
+                self.skills.act({
+                    "action": "CloseObject",
+                    "objectId": object_id,
+                })
+
+    def _scan_search_target(self) -> bool:
+        """在水平及上下 30 度视角扫描当前搜索目标并恢复视角。"""
+        if self._search_target_type is None:
+            return False
+
+        def target_found() -> bool:
+            return any(
+                item.get("object_type", "").casefold()
+                == self._search_target_type.casefold()
+                for item in self.skills.scan_pickupable()
+            )
+
+        if target_found():
+            self._search_target_horizon_delta = 0
+            return True
+        for look_action, restore_action, delta in (
+            ("LookDown", "LookUp", 30),
+            ("LookUp", "LookDown", -30),
+        ):
+            look_event = self.skills.act({
+                "action": look_action,
+                "degrees": 30,
+            })
+            found = (
+                look_event.metadata.get("lastActionSuccess") is True
+                and target_found()
+            )
+            self.skills.act({
+                "action": restore_action,
+                "degrees": 30,
+            })
+            if found:
+                self._search_target_horizon_delta = delta
+                return True
+        return False
+
+    def _remember_receptacle_viewpoints(
+        self, candidates: list[dict[str, Any]]
+    ) -> None:
+        """记录当前可达位置能观察到的容器类型。"""
+        position = dict(
+            self.controller.last_event.metadata.get("agent", {}).get(
+                "position", {}
+            )
+        )
+        if any(
+            not isinstance(position.get(axis), (int, float))
+            for axis in ("x", "y", "z")
+        ):
+            return
+        for candidate in candidates:
+            object_type = str(candidate.get("object_type", "")).casefold()
+            if not object_type:
+                continue
+            known = self._known_receptacle_viewpoints.setdefault(
+                object_type, []
+            )
+            if not any(
+                self.search._positions_close(position, item, 0.1)
+                for item in known
+            ):
+                known.append(position)
+
+    def _next_known_receptacle_viewpoint(
+        self, current_position: dict[str, float]
+    ) -> dict[str, float] | None:
+        """返回尚未回访的已知目标容器视点。"""
+        if self._search_target_type is None:
+            return None
+        target = self._search_target_type.casefold()
+        for position in self._known_receptacle_viewpoints.get(target, []):
+            key = (
+                target,
+                round(position["x"], 3),
+                round(position["z"], 3),
+            )
+            if key in self._used_receptacle_viewpoints:
+                continue
+            self._used_receptacle_viewpoints.add(key)
+            if self.search._positions_close(
+                position, current_position, tolerance=0.1
+            ):
+                continue
+            return dict(position)
+        return None
+
     def _persist_l0(self, instruction: str) -> None:
         """在任意终止路径写入一次完整 L0 对话。"""
         if self._l0_written:
@@ -449,10 +646,12 @@ class AgentExecutor:
         if skill_name == "scan":
             return self._do_scan()
         if skill_name == "pick":
-            return self.skills.pick(params["object_type"])
+            return self._do_pick(params["object_type"])
         if skill_name == "place":
             return self._do_place(params)
         if skill_name == "move_to":
+            if params["direction"] == "reachable":
+                return self._do_reachable_move(params["target_position"])
             return self._do_move_to(params["direction"])
         return SkillResult(
             success=False,
@@ -464,6 +663,7 @@ class AgentExecutor:
         """执行扫描并返回结构化结果。"""
         pickupable = self.skills.scan_pickupable()
         receptacles = self.skills.scan_receptacles(set())
+        self._remember_receptacle_viewpoints(receptacles)
         return SkillResult(
             success=True,
             data={
@@ -471,6 +671,35 @@ class AgentExecutor:
                 "receptacle_count": len(receptacles),
             },
         )
+
+    def _do_pick(self, object_type: str) -> SkillResult:
+        """按探测到的俯仰角抓取，并在动作后恢复水平视角。"""
+        delta = self._search_target_horizon_delta
+        self._search_target_horizon_delta = 0
+        if delta == 0:
+            return self.skills.pick(object_type)
+        look_action = "LookDown" if delta > 0 else "LookUp"
+        restore_action = "LookUp" if delta > 0 else "LookDown"
+        look_event = self.skills.act({
+            "action": look_action,
+            "degrees": abs(delta),
+        })
+        if look_event.metadata.get("lastActionSuccess") is not True:
+            return SkillResult(
+                success=False,
+                data={},
+                failure_reason=(
+                    look_event.metadata.get("errorMessage")
+                    or f"无法调整相机视角: {look_action}"
+                ),
+            )
+        try:
+            return self.skills.pick(object_type)
+        finally:
+            self.skills.act({
+                "action": restore_action,
+                "degrees": abs(delta),
+            })
 
     def _do_place(self, params: dict[str, Any]) -> SkillResult:
         """执行放置，自动获取当前持有的物体 ID。"""
@@ -493,6 +722,12 @@ class AgentExecutor:
 
     def _do_move_to(self, direction: str) -> SkillResult:
         """执行移动。"""
+        if direction == "reachable":
+            return SkillResult(
+                success=False,
+                data={},
+                failure_reason="可达点导航缺少 target_position",
+            )
         action_map = {
             "forward": "MoveAhead",
             "backward": "MoveBack",
@@ -513,6 +748,52 @@ class AgentExecutor:
             data={},
             failure_reason=event.metadata.get("errorMessage") if not success else None,
         )
+
+    def _do_reachable_move(
+        self, target_position: dict[str, Any]
+    ) -> SkillResult:
+        """传送到已由 AI2-THOR 证明可达的搜索视点。"""
+        if not self.search.is_reachable_position(target_position):
+            return SkillResult(
+                success=False,
+                data={"target_position": target_position},
+                failure_reason="目标位置不在已验证的可达点集合中",
+            )
+        agent = self.controller.last_event.metadata.get("agent", {})
+        event = self.skills.act({
+            "action": "TeleportFull",
+            "x": target_position["x"],
+            "y": target_position["y"],
+            "z": target_position["z"],
+            "rotation": agent.get("rotation", {"x": 0, "y": 0, "z": 0}),
+            "horizon": agent.get("cameraHorizon", 0),
+            "standing": agent.get("isStanding", True),
+        })
+        success = event.metadata.get("lastActionSuccess") is True
+        return SkillResult(
+            success=success,
+            data={"target_position": target_position},
+            failure_reason=(
+                event.metadata.get("errorMessage") if not success else None
+            ),
+        )
+
+    def _ensure_reachable_positions(self) -> None:
+        """首次搜索时查询并缓存 AI2-THOR 可达位置。"""
+        if self._reachable_positions_loaded:
+            return
+        self._reachable_positions_loaded = True
+        if not hasattr(self.controller, "step"):
+            return
+        try:
+            event = self.skills.act({"action": "GetReachablePositions"})
+        except Exception:
+            return
+        positions = event.metadata.get("actionReturn")
+        if event.metadata.get("lastActionSuccess") is True and isinstance(
+            positions, list
+        ):
+            self.search.set_reachable_positions(positions)
 
     def _append_error_to_summary(self, obs_summary: str, error: str) -> str:
         """在执行失败时，将错误信息追加到观察摘要中。"""
@@ -557,4 +838,6 @@ class AgentExecutor:
             "action_history": self.action_history,
             "final_held_object_ids": held,
             "steps_recorded": len(self.records),
+            "planner_calls": self.planner_calls,
+            "llm_calls": self.llm_calls,
         }

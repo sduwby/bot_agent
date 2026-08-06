@@ -296,3 +296,62 @@ class TestSearchStrategy:
         decision = search.next_move(current, 0.0)
 
         assert decision["parameters"]["direction"] == "right"
+
+    def test_reachable_positions_use_deterministic_farthest_point(
+        self, tmp_path: Path
+    ) -> None:
+        store = self._make_store(tmp_path)
+        search = SearchStrategy(store)
+        search.record_explored_position(
+            {"x": 0.0, "y": 0.9, "z": 0.0}, 0.0, 0
+        )
+        search.set_reachable_positions([
+            {"x": 0.0, "y": 0.9, "z": 0.0},
+            {"x": 1.0, "y": 0.9, "z": 0.0},
+            {"x": 0.0, "y": 0.9, "z": 2.0},
+        ])
+
+        decision = search.next_move(
+            {"x": 0.0, "y": 0.9, "z": 0.0}, 0.0
+        )
+
+        assert decision["parameters"] == {
+            "direction": "reachable",
+            "target_position": {"x": 0.0, "y": 0.9, "z": 2.0},
+        }
+
+    def test_reachable_position_must_come_from_cached_set(
+        self, tmp_path: Path
+    ) -> None:
+        store = self._make_store(tmp_path)
+        search = SearchStrategy(store)
+        search.set_reachable_positions([
+            {"x": 1.0, "y": 0.9, "z": 2.0},
+        ])
+
+        assert search.is_reachable_position(
+            {"x": 1.0, "y": 0.9, "z": 2.0}
+        )
+        assert not search.is_reachable_position(
+            {"x": 9.0, "y": 0.9, "z": 9.0}
+        )
+
+    def test_preferred_reachable_position_is_used_before_sampling(
+        self, tmp_path: Path
+    ) -> None:
+        store = self._make_store(tmp_path)
+        search = SearchStrategy(store)
+        preferred = {"x": 1.0, "y": 0.9, "z": 1.0}
+        search.set_reachable_positions([
+            preferred,
+            {"x": 3.0, "y": 0.9, "z": 3.0},
+        ])
+        search.record_explored_position(preferred, 0.0, 1)
+
+        decision = search.next_move(
+            {"x": 0.0, "y": 0.9, "z": 0.0},
+            0.0,
+            preferred_position=preferred,
+        )
+
+        assert decision["parameters"]["target_position"] == preferred

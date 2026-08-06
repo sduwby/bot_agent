@@ -209,6 +209,27 @@ class SearchStrategy:
         self._steps_taken = 0
         self._explored_positions: list[ExploredPosition] = []
         self._direction_index = 0
+        self._reachable_positions: list[dict[str, float]] = []
+
+    def set_reachable_positions(
+        self, positions: list[dict[str, Any]]
+    ) -> None:
+        """缓存由 AI2-THOR 返回的可达网格点。"""
+        valid: list[dict[str, float]] = []
+        for position in positions:
+            if not isinstance(position, dict):
+                continue
+            if any(
+                not isinstance(position.get(axis), (int, float))
+                for axis in ("x", "y", "z")
+            ):
+                continue
+            valid.append({
+                "x": float(position["x"]),
+                "y": float(position["y"]),
+                "z": float(position["z"]),
+            })
+        self._reachable_positions = valid
 
     def should_search_for(
         self,
@@ -223,6 +244,7 @@ class SearchStrategy:
         self,
         position: dict[str, float] | None = None,
         rotation_y: float = 0.0,
+        preferred_position: dict[str, float] | None = None,
     ) -> dict[str, Any]:
         """返回下一步建议（move_to 技能调用）。
 
@@ -235,14 +257,88 @@ class SearchStrategy:
                 "parameters": {},
             }
 
-        direction = self._next_unexplored_direction(position, rotation_y)
+        waypoint = None
+        if (
+            preferred_position is not None
+            and self.is_reachable_position(preferred_position)
+        ):
+            waypoint = dict(preferred_position)
+        if waypoint is None:
+            waypoint = self._next_reachable_position(position)
         self._steps_taken += 1
+
+        if waypoint is not None:
+            return {
+                "thought": (
+                    "搜索模式：前往未探索可达视点 "
+                    f"({waypoint['x']:.2f}, {waypoint['z']:.2f})"
+                    f"（第 {self._steps_taken} 步）"
+                ),
+                "skill": "move_to",
+                "parameters": {
+                    "direction": "reachable",
+                    "target_position": waypoint,
+                },
+            }
+
+        direction = self._next_unexplored_direction(position, rotation_y)
 
         return {
             "thought": f"搜索模式：向 {direction} 方向探索（第 {self._steps_taken} 步）",
             "skill": "move_to",
             "parameters": {"direction": direction},
         }
+
+    def _next_reachable_position(
+        self,
+        current_position: dict[str, float] | None,
+    ) -> dict[str, float] | None:
+        """用最远点采样选择覆盖增益最大的未探索可达视点。"""
+        if not self._reachable_positions:
+            return None
+        explored = [dict(item.position) for item in self._explored_positions]
+        if current_position is not None:
+            explored.append(dict(current_position))
+        candidates = [
+            point
+            for point in self._reachable_positions
+            if not any(
+                self._positions_close(point, seen, tolerance=0.1)
+                for seen in explored
+            )
+        ]
+        if not candidates:
+            return None
+
+        def coverage_score(point: dict[str, float]) -> float:
+            if not explored:
+                return 0.0
+            return min(
+                (point["x"] - seen.get("x", 0.0)) ** 2
+                + (point["z"] - seen.get("z", 0.0)) ** 2
+                for seen in explored
+            )
+
+        selected = max(
+            candidates,
+            key=lambda point: (
+                coverage_score(point),
+                -point["x"],
+                -point["z"],
+            ),
+        )
+        return dict(selected)
+
+    def is_reachable_position(
+        self, position: dict[str, Any], tolerance: float = 0.01
+    ) -> bool:
+        """验证目标点确实来自缓存的 AI2-THOR 可达点集合。"""
+        if not isinstance(position, dict):
+            return False
+        return any(
+            self._positions_close(position, candidate, tolerance)
+            for candidate in self._reachable_positions
+        )
 
     def _next_unexplored_direction(
         self,
@@ -345,7 +441,7 @@ class SearchStrategy:
     ) -> None:
         """记录当前位置已探索"""
         self._explored_positions.append(ExploredPosition(
-            position=position,
+            position=dict(position),
             rotation_y=rotation_y,
             step=step,
         ))

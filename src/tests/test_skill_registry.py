@@ -102,6 +102,19 @@ class TestValidateParameters:
         for direction in ("forward", "backward", "left", "right"):
             assert validate_parameters("move_to", {"direction": direction}) is None
 
+    def test_move_to_reachable_requires_numeric_target(self) -> None:
+        valid = {
+            "direction": "reachable",
+            "target_position": {"x": 1.0, "y": 0.9, "z": 2.0},
+        }
+        assert validate_parameters("move_to", valid) is None
+
+        err = validate_parameters(
+            "move_to", {"direction": "reachable"}
+        )
+        assert err is not None
+        assert "target_position" in err
+
     def test_move_to_invalid_enum_fails(self) -> None:
         err = validate_parameters("move_to", {"direction": "up"})
         assert err is not None

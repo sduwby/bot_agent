@@ -3,7 +3,7 @@
 恢复策略：
 - OBJECT_NOT_FOUND  → 触发搜索模式
 - GRASP_FAILED     → 重试 1 次
-- PLACEMENT_FAILED  → 重试 1 次
+- PLACEMENT_FAILED  → 前往新视点搜索其他可交互容器
 - NAVIGATION_BLOCKED → 换方向
 - LOOP_DETECTED     → 强制 scan 重新观察
 - 超过最大重试     → abort，交由 LLM 决策
@@ -99,7 +99,13 @@ class Replanner:
             return self._handle_retry(skill, params, "抓取失败，重试")
 
         if category == FailureCategory.PLACEMENT_FAILED:
-            return self._handle_retry(skill, params, "放置失败，重试")
+            return RecoveryAction(
+                action="search",
+                reason="放置失败，前往新视点搜索其他可交互容器",
+                skill_name=None,
+                params=None,
+                is_final=False,
+            )
 
         if category == FailureCategory.NAVIGATION_BLOCKED:
             return self._handle_navigation_blocked(params)

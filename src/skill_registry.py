@@ -46,9 +46,13 @@ _SKILLS: list[dict[str, Any]] = [
             "properties": {
                 "direction": {
                     "type": "string",
-                    "enum": ["forward", "backward", "left", "right"],
+                    "enum": ["forward", "backward", "left", "right", "reachable"],
                     "description": "移动方向（相对当前朝向）",
-                }
+                },
+                "target_position": {
+                    "type": "object",
+                    "description": "仅供搜索策略使用的 AI2-THOR 可达点",
+                },
             },
             "required": ["direction"],
         },
@@ -113,5 +117,13 @@ def validate_parameters(skill_name: str, params: dict[str, Any] | None) -> str |
             enum = info.get("enum")
             if enum and params[field] not in enum:
                 return f"参数 '{field}' 的值 '{params[field]}' 不在允许范围内: {enum}"
+
+    if skill_name == "move_to" and params.get("direction") == "reachable":
+        target = params.get("target_position")
+        if not isinstance(target, dict) or any(
+            not isinstance(target.get(axis), (int, float))
+            for axis in ("x", "y", "z")
+        ):
+            return "direction 为 reachable 时必须提供数值型 target_position(x, y, z)"
 
     return None

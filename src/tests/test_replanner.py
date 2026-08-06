@@ -44,8 +44,8 @@ class TestPlanRecovery:
         assert result.skill_name == "pick"
         assert result.params == {"object_type": "Apple"}
 
-    def test_placement_failed_triggers_retry(self):
-        """PLACEMENT_FAILED → retry 动作。"""
+    def test_placement_failed_triggers_reposition_search(self):
+        """PLACEMENT_FAILED → 换位搜索，而不是原地重试。"""
         rp = Replanner()
         failure = _make_failure(
             FailureCategory.PLACEMENT_FAILED,
@@ -53,8 +53,8 @@ class TestPlanRecovery:
             params={"receptacle_type": "Drawer"},
         )
         result = rp.plan_recovery(failure_info=failure)
-        assert result.action == "retry"
-        assert result.skill_name == "place"
+        assert result.action == "search"
+        assert "新视点" in result.reason
 
     def test_navigation_blocked_changes_direction(self):
         """NAVIGATION_BLOCKED → 换方向。"""
@@ -141,8 +141,8 @@ class TestRetryLimits:
         rp.reset()
         assert rp._retry_counts == {}
 
-    def test_different_skills_independent_counts(self):
-        """不同技能的重试计数相互独立。"""
+    def test_placement_search_does_not_consume_grasp_retry_count(self):
+        """放置换位搜索不应影响抓取重试计数。"""
         rp = Replanner(max_retries=1)
         pick_failure = _make_failure(FailureCategory.GRASP_FAILED, params={})
         place_failure = _make_failure(FailureCategory.PLACEMENT_FAILED, skill="place", params={})
@@ -151,7 +151,8 @@ class TestRetryLimits:
         assert r1.action == "retry"
 
         r2 = rp.plan_recovery(failure_info=place_failure)
-        assert r2.action == "retry"  # place 是独立计数
+        assert r2.action == "search"
+        assert rp._retry_counts == {"pick": 1}
 
 
 class TestRecoveryAction:

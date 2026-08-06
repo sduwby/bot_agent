@@ -37,6 +37,14 @@ _SYSTEM_PROMPT_TEMPLATE = """\
 - 物体未找到：尝试 scan 重新观察，或 move_to 移动到新位置
 - 抓取失败：可尝试重试，或寻找同一类型的其他物体
 - 放置失败：尝试换另一个容器
+
+## 内置搜索契约
+
+- scan 最多用于初始观察一次；不要用重复 scan 或手工 move_to 来搜索目标。
+- 即使当前观察中看不到目标物体，也要直接调用 pick 并填写任务要求的 object_type；pick 失败后执行器会自动进入可达视点搜索、检查关闭容器并再次探测。
+- 当前持有目标物体时，即使看不到目标容器，也要直接调用 place 并填写任务要求的 receptacle_type；place 失败后执行器会自动换位搜索。
+- move_to 的 direction 只能是 forward、backward、left、right，不得创造 ahead 等新值。
+- place 成功后立即调用 done，不要继续扫描或移动。
 """
 
 
@@ -83,15 +91,29 @@ class OpenAIBackend:
         LLM_MODEL:    模型名称（如 gpt-4o-mini）
     """
 
+    counts_as_llm = True
+
     def __init__(
         self,
         api_base: str | None = None,
         api_key: str | None = None,
         model: str | None = None,
+        timeout_seconds: float | None = None,
+        max_retries: int | None = None,
     ) -> None:
         self.api_base = api_base or os.environ.get("LLM_API_BASE", "https://api.openai.com/v1")
         self.api_key = api_key or os.environ.get("LLM_API_KEY", "")
         self.model = model or os.environ.get("LLM_MODEL", "gpt-4o-mini")
+        self.timeout_seconds = (
+            timeout_seconds
+            if timeout_seconds is not None
+            else _positive_float_env("LLM_TIMEOUT_SECONDS", 60.0)
+        )
+        self.max_retries = (
+            max_retries
+            if max_retries is not None
+            else _nonnegative_int_env("LLM_MAX_RETRIES", 1)
+        )
         self._client: Any | None = None
 
     def _ensure_client(self) -> None:
@@ -104,6 +126,8 @@ class OpenAIBackend:
         self._client = openai.OpenAI(
             base_url=self.api_base,
             api_key=self.api_key,
+            timeout=self.timeout_seconds,
+            max_retries=self.max_retries,
         )
 
     def chat(self, system: str, user: str) -> str:
@@ -123,6 +147,8 @@ class OpenAIBackend:
 
 class RuleFallback:
     """规则引擎回退：按当前任务目标执行 scan → pick → place → done。"""
+
+    counts_as_llm = False
 
     def __init__(self) -> None:
         self._step = 0
@@ -202,3 +228,21 @@ def create_backend() -> LLMBackend:
     if not api_key:
         return RuleFallback()
     return OpenAIBackend()
+
+
+def _positive_float_env(name: str, default: float) -> float:
+    """读取正浮点环境变量，非法或非正值回退默认值。"""
+    try:
+        value = float(os.environ.get(name, str(default)))
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def _nonnegative_int_env(name: str, default: int) -> int:
+    """读取非负整数环境变量，非法或负值回退默认值。"""
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except ValueError:
+        return default
+    return value if value >= 0 else default
