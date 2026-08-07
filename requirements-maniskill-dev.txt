@@ -1,0 +1,2 @@
+-r requirements-maniskill.txt
+pytest>=8,<10

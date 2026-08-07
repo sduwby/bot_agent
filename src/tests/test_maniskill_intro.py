@@ -13,6 +13,7 @@ from maniskill_intro import (
     ObservationContractError,
     ScriptedPolicy,
     run_episode,
+    run_episode_in_env,
     summarize_observation,
 )
 
@@ -219,6 +220,20 @@ def test_run_episode_collects_gymnasium_semantics_and_closes() -> None:
     assert result.action_shape == (4,)
     assert result.phase_history == ("test", "test")
     assert result.final_info["elapsed_steps"] == 2
+
+
+def test_run_episode_in_env_leaves_environment_open_for_reuse() -> None:
+    env = FakeEnv()
+
+    result = run_episode_in_env(
+        ManiSkillTaskConfig("PickCube-v1", seed=11),
+        env,
+        ZeroPolicy("PickCube-v1"),
+    )
+
+    assert result.success
+    assert env.reset_seed == 11
+    assert not env.closed
 
 
 class InvalidPolicy(ZeroPolicy):

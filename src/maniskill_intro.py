@@ -368,6 +368,20 @@ def run_episode(
 ) -> EpisodeResult:
     """执行一个 scripted episode，并聚合四类核心运行时证据。"""
     env: Any = env_factory(config)
+    try:
+        policy = policy_factory(config.env_id)
+        return run_episode_in_env(config, env, policy)
+    finally:
+        env.close()
+
+
+def run_episode_in_env(
+    config: ManiSkillTaskConfig,
+    env: object,
+    policy: Policy,
+) -> EpisodeResult:
+    """在调用方持有的环境中执行一次 episode，不关闭该环境。"""
+    runtime_env: Any = env
     steps = 0
     total_reward = 0.0
     success = False
@@ -376,68 +390,60 @@ def run_episode(
     final_info: dict[str, object] = {}
     phase_history: list[str] = []
 
-    try:
-        policy = policy_factory(config.env_id)
-        reset_result = env.reset(seed=config.seed)
-        if not isinstance(reset_result, tuple) or len(reset_result) != 2:
-            raise EpisodeContractError("env.reset() 必须返回 (observation, info)")
-        observation, _ = reset_result
-        if not isinstance(observation, Mapping):
-            raise EpisodeContractError("state_dict observation 必须是 mapping")
-        observation_fields = summarize_observation(observation)
+    reset_result = runtime_env.reset(seed=config.seed)
+    if not isinstance(reset_result, tuple) or len(reset_result) != 2:
+        raise EpisodeContractError("env.reset() 必须返回 (observation, info)")
+    observation, _ = reset_result
+    if not isinstance(observation, Mapping):
+        raise EpisodeContractError("state_dict observation 必须是 mapping")
+    observation_fields = summarize_observation(observation)
 
-        action_space = env.action_space
-        action_shape = tuple(int(size) for size in action_space.shape)
-        policy.reset()
-        for step_index in range(1, config.max_steps + 1):
-            phase_history.append(policy.phase)
-            action = np.asarray(policy.act(observation), dtype=np.float32)
-            if action.shape != action_shape:
-                raise EpisodeContractError(
-                    f"动作 shape={action.shape}，期望 {action_shape}"
-                )
-            if not np.all(np.isfinite(action)):
-                raise EpisodeContractError("动作包含非有限数")
-            if not action_space.contains(action):
-                raise EpisodeContractError(f"动作超出 action space：{action}")
-
-            step_result = env.step(action)
-            if not isinstance(step_result, tuple) or len(step_result) != 5:
-                raise EpisodeContractError(
-                    "env.step() 必须返回 Gymnasium 五元组"
-                )
-            observation, reward, raw_terminated, raw_truncated, info = (
-                step_result
+    action_space = runtime_env.action_space
+    action_shape = tuple(int(size) for size in action_space.shape)
+    policy.reset()
+    for step_index in range(1, config.max_steps + 1):
+        phase_history.append(policy.phase)
+        action = np.asarray(policy.act(observation), dtype=np.float32)
+        if action.shape != action_shape:
+            raise EpisodeContractError(
+                f"动作 shape={action.shape}，期望 {action_shape}"
             )
-            if not isinstance(observation, Mapping):
-                raise EpisodeContractError("step observation 必须是 mapping")
-            if not isinstance(info, Mapping):
-                raise EpisodeContractError("step info 必须是 mapping")
+        if not np.all(np.isfinite(action)):
+            raise EpisodeContractError("动作包含非有限数")
+        if not action_space.contains(action):
+            raise EpisodeContractError(f"动作超出 action space：{action}")
 
-            steps = step_index
-            total_reward += _scalar_float(reward, "reward")
-            terminated = _scalar_bool(raw_terminated, "terminated")
-            truncated = _scalar_bool(raw_truncated, "truncated")
-            success = _scalar_bool(info.get("success", False), "info.success")
-            converted_info = _pythonize(info)
-            if not isinstance(converted_info, dict):
-                raise EpisodeContractError("转换后的 info 必须是 dict")
-            final_info = converted_info
-            if success or terminated or truncated:
-                break
+        step_result = runtime_env.step(action)
+        if not isinstance(step_result, tuple) or len(step_result) != 5:
+            raise EpisodeContractError("env.step() 必须返回 Gymnasium 五元组")
+        observation, reward, raw_terminated, raw_truncated, info = step_result
+        if not isinstance(observation, Mapping):
+            raise EpisodeContractError("step observation 必须是 mapping")
+        if not isinstance(info, Mapping):
+            raise EpisodeContractError("step info 必须是 mapping")
 
-        return EpisodeResult(
-            env_id=config.env_id,
-            seed=config.seed,
-            observation_fields=observation_fields,
-            action_shape=action_shape,
-            steps=steps,
-            total_reward=total_reward,
-            success=success,
-            terminated=terminated,
-            truncated=truncated,
-            final_info=final_info,
-            phase_history=tuple(phase_history),
-        )
-    finally:
-        env.close()
+        steps = step_index
+        total_reward += _scalar_float(reward, "reward")
+        terminated = _scalar_bool(raw_terminated, "terminated")
+        truncated = _scalar_bool(raw_truncated, "truncated")
+        success = _scalar_bool(info.get("success", False), "info.success")
+        converted_info = _pythonize(info)
+        if not isinstance(converted_info, dict):
+            raise EpisodeContractError("转换后的 info 必须是 dict")
+        final_info = converted_info
+        if success or terminated or truncated:
+            break
+
+    return EpisodeResult(
+        env_id=config.env_id,
+        seed=config.seed,
+        observation_fields=observation_fields,
+        action_shape=action_shape,
+        steps=steps,
+        total_reward=total_reward,
+        success=success,
+        terminated=terminated,
+        truncated=truncated,
+        final_info=final_info,
+        phase_history=tuple(phase_history),
+    )
