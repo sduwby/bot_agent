@@ -85,6 +85,7 @@ class ACTTrainingConfig:
     normalization_mode: str = "unique"
     warm_start_dir: Path | None = None
     use_qvel: bool = False
+    dagger_data: Path | None = None
     random_seed: int = 20260807
     device: str = "mps"
     # 与官方 ACTConfig 默认架构一致；测试可用更小取值加速。
@@ -127,6 +128,12 @@ class ACTTrainingConfig:
                 self,
                 "warm_start_dir",
                 Path(self.warm_start_dir).expanduser().resolve(),
+            )
+        if self.dagger_data is not None:
+            object.__setattr__(
+                self,
+                "dagger_data",
+                Path(self.dagger_data).expanduser().resolve(),
             )
         for value, name in (
             (self.train_episodes_per_task, "train_episodes_per_task"),
@@ -1030,6 +1037,9 @@ def _train_one_task(
         "checkpoint_interval": config.checkpoint_interval,
         "normalization_mode": config.normalization_mode,
         "use_qvel": config.use_qvel,
+        "dagger_data": (
+            str(config.dagger_data) if config.dagger_data else None
+        ),
         "warm_start_dir": (
             str(config.warm_start_dir) if config.warm_start_dir else None
         ),
@@ -1104,6 +1114,21 @@ def train_lerobot_act(
         config.dataset_summary,
         observation_env_factory=observation_env_factory,
     )
+    if config.dagger_data is not None:
+        from dagger_collect import build_dagger_transitions, load_dagger_episodes
+
+        dagger = load_dagger_episodes(config.dagger_data)
+        env_id = str(dagger["env_id"])
+        if env_id not in config.tasks:
+            raise LeRobotACTError(
+                f"dagger 数据针对 {env_id}，但训练任务只包含 {config.tasks}"
+            )
+        merged = build_dagger_transitions(dataset[env_id], dagger)
+        print(
+            f"DAgger 合并：{env_id} 追加 {dagger['n_episodes']} 个 episode / "
+            f"{dagger['total_labeled_transitions']} 条 recovery transition"
+        )
+        dataset[env_id] = merged
     results: list[ACTTaskTrainingResult] = []
     for env_id in config.tasks:
         results.append(_train_one_task(dataset[env_id], config))

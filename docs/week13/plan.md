@@ -240,6 +240,9 @@
 | 阶段 6b | qvel + no-VAE + 热启动（design.md 10.22，fix_plan 阶段 6） | ✅ 完成（dev 13/20 持平历史；seed 100–149 22/50 < 历史 28/50） |
 | 阶段 7 | use_vae=False 深入（按需） | 已并入 no-VAE 系列；判定无效 |
 | 阶段 8 | final seeds 200–249 门禁 | ⛔ 未达 dev 门禁，按协议不执行；Week 13 维持 ⚠️ 部分完成 |
+| 阶段 9 | DAgger / recovery 补采（design.md 10.24） | ✅ 完成：接管模式补采 + 多轮累积，dev 13→16→18/20，**final 200–249 ACT 96/100（96%）> BC 92/100**，Week 13 门禁达成 |
+
+**Week 13 完成**：DAgger 接管补采（RecoveryExpert）多轮累积后，ACT 在最终未见 seed 200–249 上 96/100（PickCube 46/50 + PushCube 50/50），超越同轮 BC 92/100，全部门禁判据通过。详见 design.md 10.24。
 
 阶段 2 已实现的修复点：
 - 7.1 `random.seed/np.random.seed/torch.manual_seed` 在模型创建前生效，每任务独立（`task_seed = random_seed + task_index`）。

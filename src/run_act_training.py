@@ -54,6 +54,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="加入 Panda arm_qvel[:7]，robot state 5→12 维（schema v2）")
     parser.add_argument("--warm-start", type=Path, default=None,
                         help="从已有 checkpoint 目录热启动（载入共享权重）")
+    parser.add_argument("--dagger-data", type=Path, default=None,
+                        help="DAgger recovery 补采数据（npz），训练时合并")
     parser.add_argument("--task", type=str, default="all",
                         choices=("all",) + SUPPORTED_TASKS,
                         help="只训练指定任务或 all")
@@ -122,6 +124,7 @@ def main(argv: list[str] | None = None) -> int:
             use_vae=args.use_vae,
             use_qvel=args.use_qvel,
             warm_start_dir=args.warm_start,
+            dagger_data=args.dagger_data,
             tasks=tasks,
             random_seed=args.random_seed,
             device=args.device,

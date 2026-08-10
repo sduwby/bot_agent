@@ -703,6 +703,75 @@ def test_config_rejects_duplicate_or_unknown_tasks(tmp_path: Path) -> None:
         )
 
 
+def _recovery_observation(
+    *, tcp: np.ndarray, obj: np.ndarray, goal: np.ndarray, grasped: bool
+) -> dict[str, object]:
+    return {
+        "agent": {"qpos": np.zeros(9, dtype=np.float32)},
+        "extra": {
+            "tcp_pose": np.concatenate((tcp, np.ones(4))),
+            "obj_pose": np.concatenate((obj, np.ones(4))),
+            "goal_pos": goal,
+            "is_grasped": np.asarray(grasped),
+        },
+    }
+
+
+def test_recovery_expert_labels_grasped_near_goal() -> None:
+    from dagger_collect import RecoveryExpert, SETTLE_DIST
+
+    expert = RecoveryExpert()
+    tcp = np.array([0.0, 0.0, 0.1], dtype=float)
+    goal = np.array([0.1, 0.0, 0.1], dtype=float)
+    obj = np.array([0.05, 0.0, 0.1], dtype=float)
+    # 未抓取 → None
+    assert (
+        expert.act(
+            _recovery_observation(tcp=tcp, obj=obj, goal=goal, grasped=False)
+        )
+        is None
+    )
+    # 抓取且远离 goal（> SETTLE_DIST）→ 向 goal 移动、闭爪
+    action = expert.act(
+        _recovery_observation(tcp=tcp, obj=obj, goal=goal, grasped=True)
+    )
+    assert action is not None and action.shape == (4,)
+    assert np.all(np.abs(action[:3]) <= 1.0)
+    assert action[3] == -1.0
+    # 抓取且已到位（< SETTLE_DIST）→ 零增量保持
+    obj_at_goal = goal.copy()
+    settled = expert.act(
+        _recovery_observation(tcp=tcp, obj=obj_at_goal, goal=goal, grasped=True)
+    )
+    np.testing.assert_allclose(settled[:3], 0.0, atol=1e-6)
+    assert settled[3] == -1.0
+
+
+def test_build_dagger_transitions_merge() -> None:
+    from dagger_collect import build_dagger_transitions
+
+    base = _transitions(lengths=(2, 2, 2, 2))  # 4 episodes：2 train + 2 val
+    dagger = {
+        "env_id": "PickCube-v1",
+        "n_episodes": 2,
+        "episode_lengths": [2, 3],
+        "states": np.zeros((5, STATE_DIM), dtype=np.float32),
+        "arm_qvel": np.zeros((5, 7), dtype=np.float32),
+        "actions": np.zeros((5, ACTION_DIM), dtype=np.float32),
+    }
+    merged = build_dagger_transitions(base, dagger, start_episode_id=100, insert_after=2)
+    # 顺序：原始前 2 + dagger 2 + 原始后 2（validation 保持原始）
+    assert merged.episode_ids == (0, 1, 100, 101, 2, 3)
+    assert merged.episode_lengths == (2, 2, 2, 3, 2, 2)
+    assert merged.states.shape == (13, STATE_DIM)
+    # train = 原始前 2 + dagger（episode 0-3），validation = 原始后 2（episode 4-5）
+    train, validation = act.split_task_transitions(
+        merged, train_episodes=4, validation_episodes=2
+    )
+    # validation 只含原始后 2 个 episode 的 transition（state 索引 9-12）
+    np.testing.assert_array_equal(validation, [9, 10, 11, 12])
+
+
 # ---------------------------------------------------------------------------
 # wrapper 与 rollout
 # ---------------------------------------------------------------------------

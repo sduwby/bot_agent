@@ -741,3 +741,36 @@ qvel + no-VAE + 历史热启动 + chunk 归一化（`runs/maniskill_act/week13-e
 5. **补充验证**：qvel 模型在历史 seed 100–149 上 **22/50（44%）**，低于历史模型同 seed 的 28/50（56%）——dev 选择偏向 dev seeds，在原始评测集上反而更差。印证"dev/final 泛化差"。
 
 **最终判定（命中 fix_plan 第 15 节停止条件）**：四类实验（corrected control / chunk4 / qvel / no-VAE）完成后 ACT 仍低于 BC。**Week 13 维持 ⚠️ 部分完成**：ACT 不成为主策略，BC 继续为 learned baseline，scripted 为专家/安全 fallback；下一阶段转向补采 terminal/recovery 轨迹或 DAgger，不在当前 3257 transition 上继续调参。
+
+## 10.23 DAgger / recovery 补采设计（2026-08-10）
+
+依据 fix_plan 停止条件进入 DAgger。完整设计见 `docs/week13/dagger_plan.md`。要点：
+
+1. **RecoveryExpert**：基于 scripted 的 lift_to_goal + settle 规则（几何驱动、grasp-aware）：cube 被抓取且 `|obj-goal|>=0.018` → move 到 goal（闭爪）；`<0.018` → 零增量保持。对 ACT 访问到的任意"已抓取近目标"状态给出正确修正动作，不依赖相位状态机。
+2. **收集（round 1）**：用当前最佳 qvel+no-VAE+warm-start ACT（dev 13/20）在 20 个 seed 上 rollout；每步若 `is_grasped` 且 `|obj-goal|<=0.12`，记录 `(18 维 state, arm_qvel[7], RecoveryExpert 动作)`；连续段切分为 episode，追加到训练集。
+3. **重训**：合并原始 100 episode + 补采 N episode，`train_episodes=80+N`、`validation=20`（val 仍为原始），配置同 qvel+no-VAE+warm-start；dev rollout 选择 checkpoint。
+4. **判定**：dev ≥ BC 19/20 锁定；≥13/20 且有提升保留并可选 round 2；无提升撤销。
+5. 只标注训练数据，rollout 阶段无 scripted fallback。
+
+### 10.24 DAgger 结果与最终门禁（2026-08-10）
+
+**DAgger 接管模式补采**（修复"仅标注无 settle 样例"问题）：ACT 到达末端停滞区（`is_grasped 且 |obj-goal|<=0.10`）后由 RecoveryExpert 接管执行到成功，记录 move→settle 完整恢复轨迹。多轮累积（seeds 300–359）：
+
+| 轮次 | 补采 episode/transition | dev 150–169 |
+| --- | ---: | ---: |
+| qvel 基线（无 DAgger） | — | 13/20（65%） |
+| DAgger round 1 | 19 / 71（21% settle） | 16/20（80%） |
+| DAgger round 2 | 39 / 149 | 18/20（90%） |
+| DAgger round 3 | 59 / 229 | 18/20（90%，收敛） |
+
+修复要点：dagger episode 插入到原始 80 个 train 之后（validation 保持原始 20，不被补采污染）；补采 seed（300–359）与 dev（150–169）、final（200–249）均不重叠，dev/final 无泄漏。
+
+**最终门禁（seeds 200–249，每任务 50，共 100）**——`runs/maniskill_act/week13-final-gate.json`：
+
+| 策略 | PickCube | PushCube | 总体 | exceptions | nonfinite |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| **ACT（DAgger r3 PickCube + 历史 PushCube）** | **46/50** | **50/50** | **96/100（96%）** | 0 | 0 |
+| 同轮 BC | 42/50 | 50/50 | 92/100（92%） | 0 | 0 |
+| scripted | 50/50 | 50/50 | 100/100 | 0 | 0 |
+
+**Week 13 门禁全部通过**：PickCube ACT ≥同轮 PickCube BC、总体 ACT（96%）≥同轮总体 BC（92%）、总体 ≥75%、PushCube 无回退、100 个 episode 全有终态、exceptions=0、nonfinite=0、无 scripted fallback、checkpoint 由 dev rollout 选择。**ACT 首次在最终未见 seed 上超越 BC（96% vs 92%）。**
