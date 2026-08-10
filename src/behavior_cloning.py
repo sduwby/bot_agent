@@ -1,4 +1,12 @@
-"""第 12 周：低维 Behavior Cloning 数据、训练和独立 rollout。"""
+"""第 12 周：低维 Behavior Cloning 数据、训练和独立 rollout。
+
+稳定公共契约（第 13 周 ACT 复用，不复制实现）：
+- ``TaskTransitions``：按 episode 连续排列的监督 transition 容器；
+- ``load_bc_dataset()``：加载第 11 周 HDF5 并重建权威 18 维状态；
+- ``split_task_transitions()``：按 episode 顺序切分 train/validation；
+- ``observation_to_state()``：live observation → 18 维任务状态。
+上述接口保持参数和异常类型稳定，其他模块只应依赖这些名字。
+"""
 
 from __future__ import annotations
 
@@ -111,6 +119,7 @@ class TaskTransitions:
     episode_lengths: tuple[int, ...]
     states: np.ndarray
     actions: np.ndarray
+    arm_qvel: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -419,6 +428,7 @@ def _rebuild_episode_states(
             f"{env_id} observation 重建环境缺少 set_state_dict/get_obs"
         )
     states: list[np.ndarray] = []
+    arm_qvels: list[np.ndarray] = []
     for frame_index in range(len(actions)):
         try:
             state_dict = _read_h5_state(group["env_states"], frame_index)
@@ -427,6 +437,7 @@ def _rebuild_episode_states(
             if not isinstance(observation, Mapping):
                 raise BehaviorCloningError("重建 observation 必须是 mapping")
             states.append(observation_to_state(observation))
+            arm_qvels.append(observation_to_arm_qvel(observation))
         except (KeyError, TypeError, ValueError) as exc:
             raise BehaviorCloningError(
                 f"{env_id}/traj_{episode_id} 第 {frame_index} 帧重建失败"
@@ -436,7 +447,12 @@ def _rebuild_episode_states(
         raise BehaviorCloningError(
             f"{env_id}/traj_{episode_id} 重建 state shape={result.shape}"
         )
-    return result
+    arm_qvel = np.stack(arm_qvels).astype(np.float32, copy=False)
+    if arm_qvel.shape != (len(actions), 7):
+        raise BehaviorCloningError(
+            f"{env_id}/traj_{episode_id} 重建 arm_qvel shape={arm_qvel.shape}"
+        )
+    return result, arm_qvel
 
 
 def load_bc_dataset(
@@ -478,6 +494,7 @@ def load_bc_dataset(
         episode_lengths: list[int] = []
         state_chunks: list[np.ndarray] = []
         action_chunks: list[np.ndarray] = []
+        arm_qvel_chunks: list[np.ndarray] = []
         env: Any | None = None
         try:
             env = observation_env_factory(ManiSkillTaskConfig(env_id))
@@ -501,7 +518,7 @@ def load_bc_dataset(
                         env_id=env_id,
                         episode_id=episode_id,
                     )
-                    states = _rebuild_episode_states(
+                    states, arm_qvel = _rebuild_episode_states(
                         trajectories[group_name],
                         env_id=env_id,
                         episode_id=episode_id,
@@ -515,6 +532,7 @@ def load_bc_dataset(
                     episode_lengths.append(len(actions))
                     state_chunks.append(states)
                     action_chunks.append(actions)
+                    arm_qvel_chunks.append(arm_qvel)
         finally:
             if env is not None:
                 env.close()
@@ -527,6 +545,7 @@ def load_bc_dataset(
             episode_lengths=tuple(episode_lengths),
             states=np.concatenate(state_chunks, axis=0),
             actions=np.concatenate(action_chunks, axis=0),
+            arm_qvel=np.concatenate(arm_qvel_chunks, axis=0),
         )
     return result
 
@@ -609,6 +628,20 @@ def observation_to_state(observation: Mapping[str, object]) -> np.ndarray:
     if state.shape != (STATE_DIM,):
         raise BehaviorCloningError(f"live state shape={state.shape}")
     return state
+
+
+def observation_to_arm_qvel(observation: Mapping[str, object]) -> np.ndarray:
+    """提取 Panda 前 7 个 arm joint 速度（`is_static` 检查的关节）。"""
+    agent = observation.get("agent")
+    if not isinstance(agent, Mapping):
+        raise BehaviorCloningError("observation 缺少 agent mapping")
+    try:
+        qvel = _finite_array(agent["qvel"], (9,), "agent.qvel")
+    except KeyError as exc:
+        raise BehaviorCloningError(
+            f"observation 缺少字段 {exc.args[0]}"
+        ) from exc
+    return qvel[:7].astype(np.float32, copy=False)
 
 
 def _torch_modules() -> tuple[object, object]:
