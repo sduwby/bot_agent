@@ -1,0 +1,154 @@
+# 第 17 周实施计划 — ACT 泛化（随机背景/照明/位姿）
+
+## 1. 任务分解
+
+| 序号 | 子任务 | 文件/产物 | 依赖 |
+| --- | --- | --- | --- |
+| 1 | 固化扰动配置、分布内/外口径与超参对比范围 | `docs/week17/design.md` | Week 16 |
+| 2 | 探针验证背景/照明扰动对渲染图像的影响 [Mac] | `runs/` 探针 | 1 |
+| 3 | 实现 `PerturbationConfig` 与 `make_perturbed_render_env()` [Mac] | `src/perturbation.py` | 2 |
+| 4 | 给 `visual_act.py` / `lerobot_act.py` 增加 `cuda` 设备支持 [Mac 改代码 / 4060 验证] | `src/visual_act.py`、`src/lerobot_act.py` | 3 |
+| 5 | 实现分布内/外评测与失败分布 [Mac] | `src/run_generalization.py` | 3–4 |
+| 6 | 实现 chunk/smoothing 对比 [4060 训练 + Mac 评测] | `src/run_generalization.py` | 5 |
+| 7 | 编写扰动测试与 CLI [Mac] | `src/tests/test_perturbation.py`、CLI | 3–6 |
+| 8 | 运行定向测试、完整回归、compileall、pip check [Mac] | 全量 | 7 |
+| 9 | 分布内/外真实评测 [Mac] | `runs/maniskill_act/week17-*/` | 3–8 |
+| 10 | chunk 8 vs 4 训练与产物回传 [4060] | `runs/maniskill_act/week17-c4/` | 4、6 |
+| 11 | 4060 WSL2 环境清单与产物回传流程 [Mac 编写] | `docs/week17/cuda_setup.md`（可选） | 4 |
+| 12 | 回填真实结果、实际偏差并同步总开发计划 [Mac] | `docs/week17/*`、总计划 | 9–11 |
+
+## 2. 文件结构
+
+### 2.1 计划新增
+
+- `src/perturbation.py` — 背景/照明/位姿扰动配置与评测环境工厂。
+- `src/run_generalization.py` — 分布内/外评测、失败分布、超参对比 CLI。
+- `src/tests/test_perturbation.py` — 扰动配置、环境工厂、图像差异与错误路径测试。
+- `docs/week17/design.md` — 本周设计与实际偏差。
+- `docs/week17/plan.md` — 本实施计划与执行状态。
+- `docs/week17/cuda_setup.md` — 4060 WSL2 环境清单（可选，不阻塞主线）。
+
+### 2.2 计划修改
+
+- `src/visual_act.py`、`src/lerobot_act.py` — 设备选择与参数校验增加 `cuda`。
+- `具身智能完整项目_业余开发计划.md` — 更新第 17 周状态、当前代码结构和下一步。
+
+### 2.3 明确不修改
+
+- Week 11 正式数据、Week 12 BC、Week 13/16 ACT checkpoint；
+- Week 15 v3 数据集；
+- ManiSkill 环境、成功条件、动作空间；
+- 既有训练协议（第 13/16 周既定口径）。
+
+## 3. 实施步骤
+
+> 设备标记：**[Mac]** = Apple M4（开发、评测、测试）；**[4060]** = Windows RTX 4060 (WSL2)（多配置训练）；**[Mac/4060]** = 任一台。
+
+### 步骤 1：扰动探针 [Mac]
+
+1. 确认 `make_render_env()` + `scene.set_ambient_light()` + `update_render()` 能改变渲染图像。
+2. 确认位姿扰动可经 seed 派生并在渲染前设置。
+3. 记录 diff 数值作为"扰动生效"证据。
+
+完成条件：三项扰动均可独立使图像明显变化。
+
+### 步骤 2：扰动配置与环境工厂 [Mac]
+
+1. `PerturbationConfig`：背景、照明、位姿开关与 seed。
+2. `make_perturbed_render_env()`：reset 后按配置应用扰动。
+3. 确定性：相同 seed 产生相同扰动。
+
+完成条件：扰动可复现、可开关。
+
+### 步骤 3：cuda 设备支持 [Mac 改代码 / 4060 验证]
+
+1. `_select_device()` 支持 `cuda`（`torch.cuda.is_available()` 检查）。
+2. `run_visual_act.py` / `run_act_training.py` 参数校验允许 `cuda`。
+3. 显存记录在 CUDA 下用 `torch.cuda.max_memory_allocated`。
+4. **在 Mac 改完并提交后**，4060 拉代码、按 `docs/week17/cuda_setup.md` 搭环境，用 `--device cuda` 跑一次 smoke 验证。
+
+完成条件：4060 (WSL2) 上可用 `--device cuda` 训练。
+
+### 步骤 4：分布内/外评测与失败分布 [Mac]
+
+1. 分布内：默认环境 + in_seeds。
+2. 分布外：扰动环境 + ood_seeds。
+3. 聚合成功率、平均步数、异常、gap。
+4. 失败相位分类复用 run_act_diagnose。
+
+完成条件：`generalization_report.json`、`failure_distribution.json` 输出。
+
+### 步骤 5：超参对比 [4060 训练 + Mac 评测]
+
+1. chunk 8 vs 4 训练对比：**4060** 上 `--device cuda` 训练（Mac 仅回退用降 step）。
+2. normalization / action_smoothing 评测级对比：**Mac** 上对回传 checkpoint 评测。
+3. 训练产物（checkpoint、training_summary.json）从 4060 回传 Mac 后统一评测。
+
+完成条件：`hyperparameter_sweep.json` 输出。
+
+### 步骤 6：测试与 CLI [Mac]
+
+1. 纯逻辑：PerturbationConfig 校验、seed 派生、图像 diff。
+2. fake env：扰动应用与错误路径。
+3. 完整回归、`compileall`、`pip check`、`git diff --check`。
+
+完成条件：定向测试与完整回归通过。
+
+### 步骤 7：真实评测 [Mac]
+
+1. Mac 上对 week16-visual checkpoint 做分布内/外评测。
+2. 失败分布分析。
+3. 4060 可用时补 chunk 对比训练并回传产物，Mac 统一评测。
+
+完成条件：报告齐全。
+
+### 步骤 8：同步文档 [Mac]
+
+1. 回填 `docs/week17/design.md` 的实际扰动效果、seed 集、结果与偏差。
+2. 更新本计划复选框与执行状态。
+3. 更新总计划第 17 周状态、已完成/未完成、当前代码结构与下一步。
+
+## 4. 测试计划
+
+| 测试类型 | 命令/范围 | 验证目标 |
+| --- | --- | --- |
+| 定向测试 | `.venv-lerobot/bin/python -m pytest -q src/tests/test_perturbation.py` | 扰动配置、环境工厂、图像 diff、错误路径 |
+| 真实 smoke | `run_generalization.py --episodes-per-task 1 ...` | 分布内/外最小闭环 |
+| 完整回归 | `.venv-lerobot/bin/python -m pytest -q --ignore=src/tests/test_llm_planner.py` | 第 1–17 周无回归 |
+| 语法检查 | `.venv-lerobot/bin/python -m compileall -q src` | 所有 Python 文件可编译 |
+| 依赖检查 | `.venv-lerobot/bin/python -m pip check` | 独立环境依赖一致 |
+| 差异检查 | `git diff --check` | 无空白和补丁格式错误 |
+
+## 5. 单元测试覆盖
+
+### 5.1 扰动配置
+
+- 三项扰动开关独立生效；
+- seed 派生确定性；
+- 非法配置（负 seed、空扰动）拒绝。
+
+### 5.2 环境工厂
+
+- 扰动确实改变渲染图像（diff > 阈值）；
+- 无扰动时与默认环境一致；
+- 环境关闭与异常隔离。
+
+### 5.3 分布内/外与失败分布
+
+- 成功率、gap 计算正确；
+- 失败相位分类聚合正确。
+
+## 6. 验收清单
+
+- [ ] 背景/照明/位姿扰动均可独立开关并确定性复现。
+- [ ] 扰动确实改变渲染图像（图像 diff 显著）。
+- [ ] 分布内/外固定 seed 评测完成并输出成功率、gap。
+- [ ] chunk/smoothing 对比完成（训练级或评测级）。
+- [ ] 失败相位分布报告输出。
+- [ ] cuda 支持与 4060 WSL2 环境清单文档化（可选）。
+- [ ] 定向测试、完整回归、`compileall`、`pip check`、`git diff --check` 通过。
+- [ ] 运行产物只写入已忽略的 `runs/`。
+
+## 7. 执行状态
+
+待执行。开发开始时按步骤顺序推进，并持续更新本计划。
