@@ -167,9 +167,11 @@
 | 8 同步文档 [Mac] | ✅ 完成 | design/plan/总计划已回填 |
 
 剩余工作（4060 或后续轮次）：
-1. ✅ 已完成：4060 (WSL2) 训练 week17-c4（chunk 4，resnet18 + 128×128 + batch 8 + 1500 step/任务）完成，产物 `runs/maniskill_act/week17-c4/` 已通过 git LFS 回传（commit `56e2aea`）；训练 206 s，rollout 3/20（PushCube 3/10），checkpoint 可加载。
-2. Mac 上 `run_generalization.py --chunk-compare c4:4:runs/maniskill_act/week17-c4` 补齐 chunk 对比（拉取 commit `56e2aea` 后执行）。
-3. 训练产物回传完成后，恢复 `.gitignore` 对 `runs/` 的忽略（当前为临时放开以便 git 同步数据与产物）。
-4. 若需更强 OOD 结论，可扩分布外 seed 集或单开 background/lighting/pose 归因。
+1. ✅ 已完成：week17-c4（1500 step，commit `56e2aea`）与 **20k step 双配置**（`week17-c4-20k`、`week17-c8-20k`，commit `196d34c`，git LFS 共约 1.2GB）。
+2. ✅ 20k 训练结果（live rollout）：week17-c4-20k = PickCube 6/10 + PushCube 9/10 = **15/20（75%）**；week17-c8-20k 训练完成但 rollout 待 Mac `--chunk-compare` 统一评测（4060 自动 rollout 因 WSL GPU 挂死被跳过）。
+3. Mac 上 `run_generalization.py --chunk-compare c4-20k:4:runs/maniskill_act/week17-c4-20k,c8-20k:8:runs/maniskill_act/week17-c8-20k` 补齐 20k 同量级 chunk 对比。
+4. 训练产物回传完成后，恢复 `.gitignore` 对 `runs/` 的忽略（当前为临时放开以便 git 同步数据与产物）。
+5. 若需更强 OOD 结论，可扩分布外 seed 集或单开 background/lighting/pose 归因。
 
-> 2026-08-11 环境快照：4060 上 WSL2 Ubuntu 24.04 + 驱动 566.36（CUDA 12.7）+ torch 2.7.0+cu126 + torchvision 0.22.0+cu126 + torchcodec 0.7.0 + lerobot 0.6.1 + mani_skill 3.0.1；`--device cuda` smoke（10 step/任务）训练、checkpoint 保存重载、live rollout 全链路通过，峰值显存 960 MB。无 NVIDIA WSL Vulkan，渲染用 lavapipe CPU + `render_backend="cpu"`，视频解码用 pyav；补丁与坑见 `cuda_setup.md` §8/§9。降噪运行：`powercfg /setactive SCHEME_MIN` + `nvidia-smi -lgc 0,1500`（笔记本不支持 `-pl`），训练后 `powercfg /setactive SCHEME_MAX` + `nvidia-smi -rgc` 恢复。
+> 2026-08-11 环境快照：4060 上 WSL2 Ubuntu 24.04 + 驱动 566.36（CUDA 12.7）+ torch 2.7.0+cu126 + torchvision 0.22.0+cu126 + torchcodec 0.7.0 + lerobot 0.6.1 + mani_skill 3.0.1；`--device cuda` smoke（10 step/任务）训练、checkpoint 保存重载、live rollout 全链路通过，峰值显存 966 MB。无 NVIDIA WSL Vulkan，渲染用 lavapipe CPU + `render_backend="cpu"`，视频解码用 pyav；补丁与坑见 `cuda_setup.md` §8/§9。
+> **WSL GPU 偶发挂死**：单进程连续 GPU 计算约 30–35 分钟后 forward 卡死（GPU 利用率归零、主线程空转），与锁频无关。规避：每个训练任务用独立进程（各 ~16 分钟）运行。降噪运行：`powercfg /setactive SCHEME_MIN` + `nvidia-smi -lgc 0,1500`（笔记本不支持 `-pl`），训练后恢复。

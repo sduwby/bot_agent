@@ -323,4 +323,17 @@ make_perturbed_render_env(config, perturb)
 - 4060 (WSL2) 环境已搭建并 smoke 通过（2026-08-11）：WSL2 Ubuntu 24.04 + 驱动 566.36（CUDA 12.7）+ torch 2.7.0+cu126 + lerobot 0.6.1 + mani_skill 3.0.1，`--device cuda` 训练 10 step/任务、checkpoint 保存重载、live rollout 全链路通过，峰值显存 960 MB。
 - 环境要点（详见 `docs/week17/cuda_setup.md`）：lerobot 0.6.1 要求 `torch>=2.7`，需驱动 ≥ CUDA 12.6（原 536.67 仅 CUDA 12.2）；本机 NVIDIA 驱动缺 WSL Vulkan 集成文件，以 `sitecustomize_4060.py` 强制 ManiSkill `render_backend="cpu"`（lavapipe 软件 Vulkan）+ lerobot 视频解码走 `pyav`（torchcodec 0.7.0 在此组合 `_convert_to_tensor` op 无实现）。
 
+### 10.5 20k step 训练结果与 WSL GPU 稳定性（2026-08-11）
+
+**训练量提升**：应需求把 chunk 对比训练量从 1500 提到 20k step（week17-c4-20k / week17-c8-20k，commit `196d34c`，git LFS）。
+
+| 运行 | chunk | 训练 | live rollout（固定 seed 500–509） |
+| --- | --- | --- | --- |
+| week17-c4（1500 step） | 4 | 206 s | 3/20（PickCube 0/10、PushCube 3/10） |
+| week17-c4-20k | 4 | 1834 s | **15/20（PickCube 6/10、PushCube 9/10）** |
+| week17-c8-20k | 8 | 分任务进程 | 训练完成（PickCube best 13750、PushCube best 13000），rollout 待 Mac `--chunk-compare` 统一评测 |
+
+- 20k 训练显著提升：chunk 4 成功率 15% → 75%，验证训练量是关键瓶颈（第 22 周门禁已接近）。
+- **WSL GPU 偶发挂死**：单进程连续 GPU 计算约 30–35 分钟后 `policy.forward` 卡死（GPU 利用率归零、主线程空转、独立 CUDA 进程健康），与锁频无关（锁频/全频均复现，C4-20k 第二次运行侥幸通过）。规避：**每任务独立进程**（各约 16 分钟）运行，未再复现。
+
 > 开发中所有运行产物均写入已忽略的 `runs/`，未提交仓库。
