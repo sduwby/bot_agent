@@ -36,6 +36,8 @@ runs/maniskill_act/*
 !runs/maniskill_act/week17-c4/
 !runs/maniskill_act/week17-c4-20k/
 !runs/maniskill_act/week17-c8-20k/
+!runs/maniskill_act/week17-pick-fix-30k/
+!runs/dagger/
 src/runs/
 
 # AI2-THOR / Unity 本地下载与构建缓存
