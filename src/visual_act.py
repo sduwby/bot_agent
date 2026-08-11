@@ -1163,12 +1163,19 @@ def load_visual_act_checkpoints(
         )
         policy = ACTPolicy.from_pretrained(best_dir, config=config)
         policy.to(device)
+        # 跨设备兼容：4060 上以 cuda 训练的 checkpoint，其 processor 的
+        # device_processor 步骤记录了 "cuda"。在 Mac 上加载时用 overrides
+        # 把设备重写为当前设备（内存级合并，不修改磁盘上的 checkpoint）。
+        processor_overrides = {"device_processor": {"device": device}}
         pre = DataProcessorPipeline.from_pretrained(
-            best_dir, config_filename="policy_preprocessor.json"
+            best_dir,
+            config_filename="policy_preprocessor.json",
+            overrides=processor_overrides,
         )
         post = DataProcessorPipeline.from_pretrained(
             best_dir,
             config_filename="policy_postprocessor.json",
+            overrides=processor_overrides,
             to_transition=policy_action_to_transition,
             to_output=transition_to_policy_action,
         )
