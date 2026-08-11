@@ -1,0 +1,6 @@
+{"step": 250, "validation_loss": 0.4705179646915319}
+{"step": 500, "validation_loss": 0.4436493488598843}
+{"step": 750, "validation_loss": 0.4457819242866672}
+{"step": 1000, "validation_loss": 0.4068182770695005}
+{"step": 1250, "validation_loss": 0.3863559347026202}
+{"step": 1500, "validation_loss": 0.3924977794593694}
