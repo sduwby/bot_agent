@@ -110,7 +110,35 @@ python src/run_visual_act.py \
 
 > 具体补采脚本与 RecoveryExpert 视觉版需新增，可作为下一实施步骤。若你希望先用"30k step + z 分量加权"快速验证 z 监督的效果（无需补采），可跳过 5.1 先做 5.2+5.3。
 
-## 7. 记录说明
+## 8. 重训后复诊（30k + DAgger，2026-08-11）
+
+4060 已完成 PickCube DAgger 补采（`runs/dagger/week17-visual-dagger-pick-merged.npz`）与 30k 重训（`runs/maniskill_act/week17-pick-fix-30k`，best_step 28000，val_loss 0.1408）。Mac 复评与逐帧复诊：
+
+**正式评测**（`runs/maniskill_act/week17-pickfix-eval/`）：
+
+| 场景 | 旧版 20k | 新版 30k+DAgger |
+| --- | ---: | ---: |
+| 分布内（seed 500–509） | 1/10 (10%) | **4/10 (40%)** |
+| 分布外（seed 600–609 扰动） | 0/10 (0%) | **3/10 (30%)** |
+| gap | +10pp | +10pp |
+
+**逐帧复诊**（分布外 600–609）：
+
+| seed | 新版结果 | 变化 |
+| --- | --- | --- |
+| 600 | ✅ grasp+placed | 旧版抓到未抬升 → 新版完整 grasp→placed |
+| 604 | ✅ grasp+placed | 同上 |
+| 608 | ✅ grasp+placed | 同上 |
+| 601/602/603/605/606/607/609 | ❌ 从未抓到 | 旧版"抓到未抬升" → 新版全部截断，问题转移 |
+
+**关键结论**：
+1. **DAgger 补采解决了"不会抬升"**——成功 seed 能完整 grasp→placed（firstG=13，firstP=21–25），z 动作均值从旧版≈0 提升到 +0.04~+0.09，失败相位从 `grasped_not_placed` 变为全部 `truncated_only`。
+2. **剩余瓶颈转移到"接近但未抓上"**：7 个未抓取失败 seed 全部到达过 cube 高度（min|z_diff| ≤ 0.03，多个 0.000），但夹爪未闭合成功——是抓取时机/夹爪闭合问题，不再是抬升缺失。
+3. 与第 13 周 state-only ACT 演进路径一致：DAgger 逐步解决末端（抬升→静止→抓取）。
+
+**下一步方向**：对"到达 cube 高度但未抓上"状态做第二轮 DAgger 补采（标注闭合夹爪动作），或对抓取阶段数据增权。
+
+## 9. 记录说明
 
 - 本诊断基于 chunk 8 checkpoint；chunk 4 的 PickCube 失败大概率同因（评测中 PickCube 单任务同样接近 0%）。
 - 运行产物仅写入已忽略的 `runs/`；诊断脚本 `src/run_pickcube_diagnose.py`。
