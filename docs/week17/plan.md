@@ -167,9 +167,9 @@
 | 8 同步文档 [Mac] | ✅ 完成 | design/plan/总计划已回填 |
 
 剩余工作（4060 或后续轮次）：
-1. 4060 (WSL2) 正式训练 week17-c4（chunk 4）：环境已就绪（`docs/week17/cuda_setup.md`），执行 §2.2 训练命令产出 `runs/maniskill_act/week17-c4/` 并回传；
-2. Mac 上 `run_generalization.py --chunk-compare c4:4:runs/maniskill_act/week17-c4` 补齐 chunk 对比；
-3. 训练产物回传完成后，恢复 `.gitignore` 对 `runs/` 的忽略（当前为临时放开以便 git 拉取数据）；
+1. ✅ 已完成：4060 (WSL2) 训练 week17-c4（chunk 4，resnet18 + 128×128 + batch 8 + 1500 step/任务）完成，产物 `runs/maniskill_act/week17-c4/` 已通过 git LFS 回传（commit `56e2aea`）；训练 206 s，rollout 3/20（PushCube 3/10），checkpoint 可加载。
+2. Mac 上 `run_generalization.py --chunk-compare c4:4:runs/maniskill_act/week17-c4` 补齐 chunk 对比（拉取 commit `56e2aea` 后执行）。
+3. 训练产物回传完成后，恢复 `.gitignore` 对 `runs/` 的忽略（当前为临时放开以便 git 同步数据与产物）。
 4. 若需更强 OOD 结论，可扩分布外 seed 集或单开 background/lighting/pose 归因。
 
-> 2026-08-11 环境快照：4060 上 WSL2 Ubuntu 24.04 + 驱动 566.36（CUDA 12.7）+ torch 2.7.0+cu126 + torchvision 0.22.0+cu126 + torchcodec 0.7.0 + lerobot 0.6.1 + mani_skill 3.0.1；`--device cuda` smoke（10 step/任务）训练、checkpoint 保存重载、live rollout 全链路通过，峰值显存 960 MB。无 NVIDIA WSL Vulkan，渲染用 lavapipe CPU + `render_backend="cpu"`，视频解码用 pyav；补丁与坑见 `cuda_setup.md` §8/§9。
+> 2026-08-11 环境快照：4060 上 WSL2 Ubuntu 24.04 + 驱动 566.36（CUDA 12.7）+ torch 2.7.0+cu126 + torchvision 0.22.0+cu126 + torchcodec 0.7.0 + lerobot 0.6.1 + mani_skill 3.0.1；`--device cuda` smoke（10 step/任务）训练、checkpoint 保存重载、live rollout 全链路通过，峰值显存 960 MB。无 NVIDIA WSL Vulkan，渲染用 lavapipe CPU + `render_backend="cpu"`，视频解码用 pyav；补丁与坑见 `cuda_setup.md` §8/§9。降噪运行：`powercfg /setactive SCHEME_MIN` + `nvidia-smi -lgc 0,1500`（笔记本不支持 `-pl`），训练后 `powercfg /setactive SCHEME_MAX` + `nvidia-smi -rgc` 恢复。
