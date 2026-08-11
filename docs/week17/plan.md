@@ -159,14 +159,17 @@
 | --- | --- | --- |
 | 1 扰动探针 [Mac] | ✅ 完成 | 三项扰动均改变渲染图像；探针记录在 `runs/probes/week17/` |
 | 2 扰动配置与环境工厂 [Mac] | ✅ 完成 | `src/perturbation.py`：PerturbationConfig + PerturbedRenderEnv + make_perturbed_render_env |
-| 3 cuda 设备支持 [Mac 改代码 / 4060 验证] | ⚠️ 部分完成 | `visual_act.py`/`lerobot_act.py`/CLI/`act_stability.py` 均支持 cuda；4060 WSL2 smoke 验证未执行 |
+| 3 cuda 设备支持 [Mac 改代码 / 4060 验证] | ✅ 完成 | `visual_act.py`/`lerobot_act.py`/CLI/`act_stability.py` 均支持 cuda；4060 (WSL2) 已搭建环境并 `--device cuda` smoke 验证通过（见 `docs/week17/cuda_setup.md`） |
 | 4 分布内/外评测与失败分布 [Mac] | ✅ 完成 | `src/run_generalization.py`：`_evaluate_split`/`evaluate_generalization`/`analyze_failure_distribution` |
 | 5 超参对比 [4060 训练 + Mac 评测] | ⚠️ 部分完成 | smoothing 评测级已落地；chunk 8 vs 4 训练对比待 4060 回传 |
 | 6 测试与 CLI [Mac] | ✅ 完成 | `test_perturbation.py` 23 项定向测试；完整回归 407 项通过 |
 | 7 真实评测 [Mac] | ✅ 完成 | week16-visual checkpoint 分布内 0/20、分布外 2/20，见 `design.md §10.3` |
 | 8 同步文档 [Mac] | ✅ 完成 | design/plan/总计划已回填 |
 
-剩余工作（等待 4060 或后续轮次）：
-1. 4060 (WSL2) 按 `cuda_setup.md` 搭建环境，`--device cuda` 训练 week17-c4（chunk 4）并回传 checkpoint；
+剩余工作（4060 或后续轮次）：
+1. 4060 (WSL2) 正式训练 week17-c4（chunk 4）：环境已就绪（`docs/week17/cuda_setup.md`），执行 §2.2 训练命令产出 `runs/maniskill_act/week17-c4/` 并回传；
 2. Mac 上 `run_generalization.py --chunk-compare c4:4:runs/maniskill_act/week17-c4` 补齐 chunk 对比；
-3. 若需更强 OOD 结论，可扩分布外 seed 集或单开 background/lighting/pose 归因。
+3. 训练产物回传完成后，恢复 `.gitignore` 对 `runs/` 的忽略（当前为临时放开以便 git 拉取数据）；
+4. 若需更强 OOD 结论，可扩分布外 seed 集或单开 background/lighting/pose 归因。
+
+> 2026-08-11 环境快照：4060 上 WSL2 Ubuntu 24.04 + 驱动 566.36（CUDA 12.7）+ torch 2.7.0+cu126 + torchvision 0.22.0+cu126 + torchcodec 0.7.0 + lerobot 0.6.1 + mani_skill 3.0.1；`--device cuda` smoke（10 step/任务）训练、checkpoint 保存重载、live rollout 全链路通过，峰值显存 960 MB。无 NVIDIA WSL Vulkan，渲染用 lavapipe CPU + `render_backend="cpu"`，视频解码用 pyav；补丁与坑见 `cuda_setup.md` §8/§9。

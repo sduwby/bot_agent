@@ -320,6 +320,7 @@ make_perturbed_render_env(config, perturb)
 
 - `visual_act.py` / `lerobot_act.py` 的 `_select_device` 支持 `cuda`（不可用时明确报错，不再静默回退 cpu）；显存记录在 cuda 下改用 `torch.cuda.max_memory_allocated`。
 - `VisualACTTrainingConfig`、`StabilityEvalConfig`、`run_act_training.py`、`run_act_diagnose.py` 的参数校验均接受 `cuda`。
-- 4060 (WSL2) 上以 `--device cuda` 跑一次 smoke 验证待执行。
+- 4060 (WSL2) 环境已搭建并 smoke 通过（2026-08-11）：WSL2 Ubuntu 24.04 + 驱动 566.36（CUDA 12.7）+ torch 2.7.0+cu126 + lerobot 0.6.1 + mani_skill 3.0.1，`--device cuda` 训练 10 step/任务、checkpoint 保存重载、live rollout 全链路通过，峰值显存 960 MB。
+- 环境要点（详见 `docs/week17/cuda_setup.md`）：lerobot 0.6.1 要求 `torch>=2.7`，需驱动 ≥ CUDA 12.6（原 536.67 仅 CUDA 12.2）；本机 NVIDIA 驱动缺 WSL Vulkan 集成文件，以 `sitecustomize_4060.py` 强制 ManiSkill `render_backend="cpu"`（lavapipe 软件 Vulkan）+ lerobot 视频解码走 `pyav`（torchcodec 0.7.0 在此组合 `_convert_to_tensor` op 无实现）。
 
 > 开发中所有运行产物均写入已忽略的 `runs/`，未提交仓库。
