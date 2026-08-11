@@ -144,8 +144,8 @@ class VisualACTTrainingConfig:
         )
         if self.n_action_steps > self.chunk_size:
             raise ValueError("n_action_steps 不能大于 chunk_size")
-        if self.device not in ("mps", "cpu"):
-            raise ValueError("device 只支持 mps 或 cpu")
+        if self.device not in ("mps", "cpu", "cuda"):
+            raise ValueError("device 只支持 mps、cuda 或 cpu")
         if not self.vision_backbone.startswith("resnet"):
             raise ValueError("vision_backbone 必须是 ResNet 变体")
         checked: list[str] = []
@@ -270,9 +270,17 @@ def _torch_module() -> object:
 
 def _select_device(device: str) -> str:
     torch = _torch_module()
-    if device == "mps" and not torch.backends.mps.is_available():
+    if device == "mps":
+        if not torch.backends.mps.is_available():
+            raise VisualACTError("mps 不可用，请改用 cpu 或 cuda")
+        return "mps"
+    if device == "cuda":
+        if not torch.cuda.is_available():
+            raise VisualACTError("cuda 不可用，请改用 mps 或 cpu")
+        return "cuda"
+    if device == "cpu":
         return "cpu"
-    return device
+    raise VisualACTError(f"device 不受支持：{device!r}")
 
 
 def _lerobot_import_error(exc: Exception) -> VisualACTError:
@@ -662,6 +670,18 @@ def _peak_rss_mb() -> float:
     return round(rss / 1024.0, 3)
 
 
+def _peak_memory_mb(device: str) -> float:
+    """返回峰值显存（cuda）或峰值常驻内存（mps/cpu），单位为 MB。"""
+    if device == "cuda":
+        torch = _torch_module()
+        if not torch.cuda.is_available():
+            return 0.0
+        return round(
+            float(torch.cuda.max_memory_allocated()) / (1024.0 ** 2), 3
+        )
+    return _peak_rss_mb()
+
+
 def _git_commit() -> str | None:
     import subprocess
 
@@ -864,7 +884,7 @@ def _train_one_task(
         best_train_loss=best_train_loss,
         best_validation_loss=best_validation_loss,
         device=device,
-        peak_rss_mb=_peak_rss_mb(),
+        peak_rss_mb=_peak_memory_mb(device),
         duration_seconds=round(time.perf_counter() - started, 6),
     )
 
@@ -1353,8 +1373,12 @@ def write_resource_report(
     evaluation: PolicyEvaluationSummary,
     peak_rss_before: float,
 ) -> ResourceReport:
-    """写出训练/评测的显存与时长记录。"""
-    peak_rss_total = _peak_rss_mb()
+    """写出训练/评测的显存与时长记录。
+
+    设备为 ``cuda`` 时 ``peak_rss_*`` 字段表示峰值显存（MB），
+    其余设备表示峰值常驻内存。
+    """
+    peak_rss_total = _peak_memory_mb(device)
     report = ResourceReport(
         schema_version=VISUAL_SCHEMA_VERSION,
         created_at=_utc_now(),

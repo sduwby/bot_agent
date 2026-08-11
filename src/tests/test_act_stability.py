@@ -120,7 +120,7 @@ def test_config_rejects_invalid(tmp_path: Path) -> None:
             bc_checkpoint=tmp_path,
             output_dir=tmp_path,
             seeds=(500,),
-            device="cuda",
+            device="tpu",
         )
     with pytest.raises(ValueError, match="smoothing"):
         StabilityEvalConfig(

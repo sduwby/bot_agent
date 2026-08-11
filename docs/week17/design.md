@@ -280,4 +280,46 @@ make_perturbed_render_env(config, perturb)
 
 ## 10. 实际偏差
 
-当前只完成设计，尚未实现代码。开发过程中若扰动实现、分布内/外口径、超参对比范围或 4060 协作方式与本文不同，必须先在本节记录偏差，再继续实施。
+### 10.1 实现偏差（开发后回填）
+
+| 设计项 | 设计 | 实际 |
+| --- | --- | --- |
+| `PerturbationConfig` 字段 | `env_id/seed/max_steps` | 移除这三个字段；seed 直接取自 `ManiSkillTaskConfig`，颜色由 episode seed 经固定 RNG 派生，新增 `background_colors`/`ambient_colors` 调色板 |
+| 背景扰动实现 | 修改地面/桌面材质颜色 | ground 自带 grid texture 覆盖 `base_color`，且 `RenderShapeTriangleMesh.material` 无 setter；改为**新增彩色背景面板**（`add_box_visual` + `build_static`），持有 `RenderMaterial` 引用并在每次 reset 时 `set_base_color` 换色 |
+| 位姿扰动实现 | 由 seed 派生并设置物体/goal 位姿 | 沿用第 14 周 seed 语义：分布外 seed 集（600–609）本身产生更广位姿；不额外修改场景物体位姿 |
+| 分布内/外评测 | 复用 `evaluate_visual_act()` | 新增 `_evaluate_split()`（`run_generalization.py`）复用 `load_visual_act_checkpoints` + `run_visual_episode_in_env`，避免把 `evaluation.json` 写进 checkpoint 目录 |
+| 失败分布 | 复用 `run_act_diagnose.diagnose_episode` | 该接口面向 state-only `LeRobotACTPolicy`；改为在 rollout 中捕获 `is_grasped/is_obj_placed/is_robot_static` 信号，复用 `act_stability.classify_failure_diagnosis` 分类规则 |
+| 超参对比 | chunk 训练级 + smoothing 评测级 | smoothing 评测级已落地；chunk 对比待 4060 回传 week17-c4 checkpoint 后运行 `--chunk-compare` |
+
+### 10.2 扰动探针结果（Mac M4，2026-08-11）
+
+探针脚本：`runs/probes/week17/perturbation_probe.py`；结果：`runs/probes/week17/probe_result.json`。
+
+| 扰动 | 方法 | 平均绝对像素差 | 结论 |
+| --- | --- | --- | --- |
+| 照明 | `set_ambient_light([0.9,0.3,0.3])` + `update_render()` | 10.598（红）/ 9.181（绿） | 有效 |
+| 背景 | 新增彩色面板（红/蓝） | 21.268 / 20.360 | 有效 |
+| 位姿 | seed 600 vs 601 物体位姿 | 距离 0.139 m | 有效 |
+
+### 10.3 真实评测结果（Mac M4，week16-visual checkpoint，seed 集 500–509 / 600–609）
+
+完整报告：`runs/maniskill_act/week17-eval/generalization_report.json`。
+
+| 指标 | 分布内 | 分布外 | gap |
+| --- | --- | --- | --- |
+| 总体 | 0/20（0.0%） | 2/20（10.0%） | −10.0pp |
+| PickCube-v1 | 0/10（0.0%） | 0/10（0.0%） | 0 |
+| PushCube-v1 | 0/10（0.0%） | 2/10（20.0%） | −20.0pp |
+
+- 失败分布（分布外）：PickCube 全为 `truncated_only`（9）+ `grasped_not_placed`（1）；PushCube 全为 `truncated_only`（8）。
+- action_smoothing 评测级扫描（分布外）：1.0→10%、0.9→10%、0.75→5%、0.5→10%，波动在噪声范围内。
+- 成功率为 0–10% 属预期：week16 视觉 ACT 仅训练 1500 step，本周验收为泛化评测管线，视觉 ACT ≥60% 门禁在第 22 周。
+- chunk 对比待 4060（WSL2）训练 week17-c4 并回传后执行。
+
+### 10.4 cuda 支持（Mac 改代码 / 4060 验证）
+
+- `visual_act.py` / `lerobot_act.py` 的 `_select_device` 支持 `cuda`（不可用时明确报错，不再静默回退 cpu）；显存记录在 cuda 下改用 `torch.cuda.max_memory_allocated`。
+- `VisualACTTrainingConfig`、`StabilityEvalConfig`、`run_act_training.py`、`run_act_diagnose.py` 的参数校验均接受 `cuda`。
+- 4060 (WSL2) 上以 `--device cuda` 跑一次 smoke 验证待执行。
+
+> 开发中所有运行产物均写入已忽略的 `runs/`，未提交仓库。

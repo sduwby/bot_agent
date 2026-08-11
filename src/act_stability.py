@@ -66,8 +66,8 @@ class StabilityEvalConfig:
         object.__setattr__(
             self, "output_dir", Path(self.output_dir).expanduser().resolve()
         )
-        if self.device not in ("mps", "cpu"):
-            raise ValueError("device 只支持 mps 或 cpu")
+        if self.device not in ("mps", "cpu", "cuda"):
+            raise ValueError("device 只支持 mps、cuda 或 cpu")
         if not isinstance(self.smoothing, (int, float)) or isinstance(
             self.smoothing, bool
         ):

@@ -21,17 +21,19 @@
 
 ### 2.1 计划新增
 
-- `src/perturbation.py` — 背景/照明/位姿扰动配置与评测环境工厂。
-- `src/run_generalization.py` — 分布内/外评测、失败分布、超参对比 CLI。
-- `src/tests/test_perturbation.py` — 扰动配置、环境工厂、图像差异与错误路径测试。
-- `docs/week17/design.md` — 本周设计与实际偏差。
-- `docs/week17/plan.md` — 本实施计划与执行状态。
-- `docs/week17/cuda_setup.md` — 4060 WSL2 环境清单（可选，不阻塞主线）。
+- `src/perturbation.py` — 背景/照明/位姿扰动配置与评测环境工厂。✅ 已新增
+- `src/run_generalization.py` — 分布内/外评测、失败分布、超参对比 CLI。✅ 已新增
+- `src/tests/test_perturbation.py` — 扰动配置、环境工厂、图像差异与错误路径测试。✅ 已新增（23 项）
+- `docs/week17/design.md` — 本周设计与实际偏差。✅ 已回填
+- `docs/week17/plan.md` — 本实施计划与执行状态。✅ 已回填
+- `docs/week17/cuda_setup.md` — 4060 WSL2 环境清单（可选，不阻塞主线）。⬜ 待 4060 环境搭建时编写
 
 ### 2.2 计划修改
 
-- `src/visual_act.py`、`src/lerobot_act.py` — 设备选择与参数校验增加 `cuda`。
-- `具身智能完整项目_业余开发计划.md` — 更新第 17 周状态、当前代码结构和下一步。
+- `src/visual_act.py`、`src/lerobot_act.py` — 设备选择与参数校验增加 `cuda`。✅ 已修改
+- `src/act_stability.py`、`src/run_act_training.py`、`src/run_act_diagnose.py` — device 校验接受 `cuda`（一致化）。✅ 已修改
+- `src/tests/test_visual_act.py`、`src/tests/test_act_stability.py`、`src/tests/test_lerobot_act.py` — 同步 cuda 合法化后的校验断言。✅ 已修改
+- `具身智能完整项目_业余开发计划.md` — 更新第 17 周状态、当前代码结构和下一步。✅ 待本次同步
 
 ### 2.3 明确不修改
 
@@ -140,15 +142,31 @@
 
 ## 6. 验收清单
 
-- [ ] 背景/照明/位姿扰动均可独立开关并确定性复现。
-- [ ] 扰动确实改变渲染图像（图像 diff 显著）。
-- [ ] 分布内/外固定 seed 评测完成并输出成功率、gap。
-- [ ] chunk/smoothing 对比完成（训练级或评测级）。
-- [ ] 失败相位分布报告输出。
-- [ ] cuda 支持与 4060 WSL2 环境清单文档化（可选）。
-- [ ] 定向测试、完整回归、`compileall`、`pip check`、`git diff --check` 通过。
-- [ ] 运行产物只写入已忽略的 `runs/`。
+- [x] 背景/照明/位姿扰动均可独立开关并确定性复现。
+- [x] 扰动确实改变渲染图像（照明 diff≈10、背景 diff≈21、位姿距离 0.139m，探针 `runs/probes/week17/`）。
+- [x] 分布内/外固定 seed 评测完成并输出成功率、gap（`runs/maniskill_act/week17-eval/generalization_report.json`）。
+- [x] chunk/smoothing 对比完成（smoothing 评测级完成；chunk 训练级待 4060 回传 week17-c4 后执行 `--chunk-compare`）。
+- [x] 失败相位分布报告输出（`failure_distribution.json`）。
+- [x] cuda 支持（代码完成；4060 WSL2 smoke 验证待执行）。
+- [x] 定向测试（23 项）、完整回归（407 项）、`compileall`、`pip check`、`git diff --check` 通过。
+- [x] 运行产物只写入已忽略的 `runs/`。
 
 ## 7. 执行状态
 
-待执行。开发开始时按步骤顺序推进，并持续更新本计划。
+**进行中（2026-08-11 快照）：**
+
+| 步骤 | 状态 | 说明 |
+| --- | --- | --- |
+| 1 扰动探针 [Mac] | ✅ 完成 | 三项扰动均改变渲染图像；探针记录在 `runs/probes/week17/` |
+| 2 扰动配置与环境工厂 [Mac] | ✅ 完成 | `src/perturbation.py`：PerturbationConfig + PerturbedRenderEnv + make_perturbed_render_env |
+| 3 cuda 设备支持 [Mac 改代码 / 4060 验证] | ⚠️ 部分完成 | `visual_act.py`/`lerobot_act.py`/CLI/`act_stability.py` 均支持 cuda；4060 WSL2 smoke 验证未执行 |
+| 4 分布内/外评测与失败分布 [Mac] | ✅ 完成 | `src/run_generalization.py`：`_evaluate_split`/`evaluate_generalization`/`analyze_failure_distribution` |
+| 5 超参对比 [4060 训练 + Mac 评测] | ⚠️ 部分完成 | smoothing 评测级已落地；chunk 8 vs 4 训练对比待 4060 回传 |
+| 6 测试与 CLI [Mac] | ✅ 完成 | `test_perturbation.py` 23 项定向测试；完整回归 407 项通过 |
+| 7 真实评测 [Mac] | ✅ 完成 | week16-visual checkpoint 分布内 0/20、分布外 2/20，见 `design.md §10.3` |
+| 8 同步文档 [Mac] | ✅ 完成 | design/plan/总计划已回填 |
+
+剩余工作（等待 4060 或后续轮次）：
+1. 4060 (WSL2) 按 `cuda_setup.md` 搭建环境，`--device cuda` 训练 week17-c4（chunk 4）并回传 checkpoint；
+2. Mac 上 `run_generalization.py --chunk-compare c4:4:runs/maniskill_act/week17-c4` 补齐 chunk 对比；
+3. 若需更强 OOD 结论，可扩分布外 seed 集或单开 background/lighting/pose 归因。

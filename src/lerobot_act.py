@@ -409,11 +409,17 @@ def _lerobot_import_error(exc: Exception) -> LeRobotACTError:
 
 def _select_device(device: str) -> str:
     torch = _torch_module()
-    if device == "mps" and torch.backends.mps.is_available():
+    if device == "mps":
+        if not torch.backends.mps.is_available():
+            raise LeRobotACTError("mps 不可用，请改用 cpu 或 cuda")
         return "mps"
+    if device == "cuda":
+        if not torch.cuda.is_available():
+            raise LeRobotACTError("cuda 不可用，请改用 mps 或 cpu")
+        return "cuda"
     if device == "cpu":
         return "cpu"
-    return "cpu"
+    raise LeRobotACTError(f"device 不受支持：{device!r}")
 
 
 def _git_commit() -> str | None:

@@ -106,8 +106,8 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError("dev_episodes 必须是正整数")
         if args.checkpoint_interval is not None and args.checkpoint_interval <= 0:
             raise ValueError("checkpoint_interval 必须是正整数")
-        if args.device not in ("mps", "cpu"):
-            raise ValueError("device 只支持 mps 或 cpu")
+        if args.device not in ("mps", "cpu", "cuda"):
+            raise ValueError("device 只支持 mps、cuda 或 cpu")
         tasks = SUPPORTED_TASKS if args.task == "all" else (args.task,)
         config = ACTTrainingConfig(
             dataset_summary=args.dataset_summary,

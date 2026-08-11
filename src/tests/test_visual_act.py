@@ -100,7 +100,7 @@ def test_config_validation(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="n_action_steps"):
         _tiny_config(tmp_path, chunk_size=4, n_action_steps=5)
     with pytest.raises(ValueError, match="device"):
-        _tiny_config(tmp_path, device="cuda")
+        _tiny_config(tmp_path, device="tpu")
     with pytest.raises(ValueError, match="vision_backbone"):
         _tiny_config(tmp_path, vision_backbone="vit")
     with pytest.raises(ValueError, match="不支持"):

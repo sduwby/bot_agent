@@ -1090,7 +1090,7 @@ def test_probe_lerobot_act() -> None:
 
 
 def test_cli_rejects_invalid_device(capsys: object) -> None:
-    assert act_training_main(["--device", "cuda"]) == 1
+    assert act_training_main(["--device", "tpu"]) == 1
     assert "device" in capsys.readouterr().err
 
 

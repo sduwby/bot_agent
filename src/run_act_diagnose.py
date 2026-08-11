@@ -357,8 +357,8 @@ def main(argv: list[str] | None = None) -> int:
         seeds = _checked_seeds(
             [int(item) for item in args.seeds.split(",") if item.strip()]
         )
-        if args.device not in ("mps", "cpu"):
-            raise ValueError("device 只支持 mps 或 cpu")
+        if args.device not in ("mps", "cpu", "cuda"):
+            raise ValueError("device 只支持 mps、cuda 或 cpu")
         # 提前解析绝对路径，避免 ManiSkill 改变 CWD 后相对路径失效。
         output_dir = Path(args.output_dir).expanduser().resolve()
         report_path = (
