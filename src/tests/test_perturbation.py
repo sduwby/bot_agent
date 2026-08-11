@@ -28,6 +28,33 @@ import run_generalization as rg
 
 
 # ---------------------------------------------------------------------------
+# chunk-compare 解析
+# ---------------------------------------------------------------------------
+
+
+def test_parse_chunk_candidates_three_parts() -> None:
+    candidates = rg._parse_chunk_candidates(
+        ["c4:4:runs/maniskill_act/week17-c4-20k",
+         "c8:8:runs/maniskill_act/week17-c8-20k"]
+    )
+    assert candidates == [
+        ("c4", Path("runs/maniskill_act/week17-c4-20k"), 4),
+        ("c8", Path("runs/maniskill_act/week17-c8-20k"), 8),
+    ]
+
+
+def test_parse_chunk_candidates_rejects_bad_entries() -> None:
+    with pytest.raises(ValueError, match="tag:chunk:path"):
+        rg._parse_chunk_candidates(["only_tag"])
+    with pytest.raises(ValueError, match="必须是整数"):
+        rg._parse_chunk_candidates(["c4:four:path"])
+    with pytest.raises(ValueError, match="正整数"):
+        rg._parse_chunk_candidates(["c4:0:path"])
+    with pytest.raises(ValueError, match="tag 不能为空"):
+        rg._parse_chunk_candidates([":4:path"])
+
+
+# ---------------------------------------------------------------------------
 # 扰动配置
 # ---------------------------------------------------------------------------
 

@@ -680,10 +680,26 @@ def _parse_seeds(text: str) -> tuple[int, ...]:
 def _parse_chunk_candidates(
     entries: Sequence[str],
 ) -> list[tuple[str, Path, int]]:
+    """解析 ``tag:chunk:path`` 三段式候选（与帮助文本、run_chunk_compare 契约一致）。"""
     candidates: list[tuple[str, Path, int]] = []
     for entry in entries:
-        tag, _, chunk, path = entry.split(":", 3)
-        candidates.append((tag, Path(path), int(chunk)))
+        parts = entry.split(":", 2)
+        if len(parts) != 3:
+            raise ValueError(
+                f"chunk-compare 条目格式应为 tag:chunk:path，实际：{entry!r}"
+            )
+        tag, chunk_text, path = parts
+        if not tag.strip():
+            raise ValueError("chunk-compare 的 tag 不能为空")
+        try:
+            chunk = int(chunk_text)
+        except ValueError as exc:
+            raise ValueError(
+                f"chunk-compare 的 chunk 必须是整数：{chunk_text!r}"
+            ) from exc
+        if chunk <= 0:
+            raise ValueError("chunk-compare 的 chunk 必须是正整数")
+        candidates.append((tag, Path(path), chunk))
     return candidates
 
 
@@ -773,6 +789,12 @@ def main(argv: list[str] | None = None) -> int:
             if args.chunk_compare
             else None
         )
+        # 提前解析为绝对路径，避免 ManiSkill 改变 CWD 后相对路径失效。
+        if chunk_candidates is not None:
+            chunk_candidates = [
+                (tag, Path(path).expanduser().resolve(), chunk)
+                for tag, path, chunk in chunk_candidates
+            ]
         print(
             f"分布内 seeds={config.in_distribution_seeds} "
             f"分布外 seeds={config.out_of_distribution_seeds} "

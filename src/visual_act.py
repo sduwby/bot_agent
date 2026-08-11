@@ -951,6 +951,18 @@ def _validate_smoothing(value: float) -> float:
     return float(value)
 
 
+def _to_float32_numpy(value: object) -> np.ndarray:
+    """把 tensor/数组安全转成 CPU float32 一维数组（MPS/cuda 兼容）。"""
+    candidate = value
+    detach = getattr(candidate, "detach", None)
+    if callable(detach):
+        candidate = detach()
+    cpu = getattr(candidate, "cpu", None)
+    if callable(cpu):
+        candidate = cpu()
+    return np.asarray(candidate, dtype=np.float32).reshape(-1)
+
+
 class VisualACTPolicy:
     """从磁盘 checkpoint 构造的单任务视觉 ACT rollout wrapper。"""
 
@@ -1031,7 +1043,7 @@ class VisualACTPolicy:
         action = self._policy.select_action(processed)
         action = self._post(action)
         self.inference_ms += (time.perf_counter() - started) * 1000.0
-        array = np.asarray(action, dtype=np.float32).reshape(-1)
+        array = _to_float32_numpy(action)
         if array.shape != (ACTION_DIM,):
             raise VisualACTError(
                 f"{self.env_id} 视觉 ACT 输出 shape={array.shape}"
@@ -1226,7 +1238,7 @@ def run_visual_episode_in_env(
         if not isinstance(observation, Mapping) or not isinstance(info, Mapping):
             raise VisualACTError("step observation/info 必须是 mapping")
         steps = step_index
-        total_reward += float(np.asarray(reward).reshape(-1)[0])
+        total_reward += float(_to_float32_numpy(reward).reshape(-1)[0])
         terminated = _scalar_bool(raw_terminated, "terminated")
         truncated = _scalar_bool(raw_truncated, "truncated")
         success = _scalar_bool(info.get("success", False), "info.success")
