@@ -69,6 +69,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--device", type=str, default="mps")
     parser.add_argument("--train-episodes-per-task", type=int, default=80)
     parser.add_argument("--validation-episodes-per-task", type=int, default=20)
+    parser.add_argument(
+        "--dagger-data",
+        type=Path,
+        default=None,
+        help="视觉 DAgger 补采 npz，合并进对应任务的训练数据",
+    )
     parser.add_argument("--eval-seed-start", type=int, default=500)
     parser.add_argument("--eval-episodes-per-task", type=int, default=10)
     parser.add_argument("--skip-training", action="store_true")
@@ -117,6 +123,7 @@ def main(argv: list[str] | None = None) -> int:
             device=args.device,
             train_episodes_per_task=args.train_episodes_per_task,
             validation_episodes_per_task=args.validation_episodes_per_task,
+            dagger_data=args.dagger_data,
         )
         output_dir = config.output_dir
         peak_rss_before = _peak_rss()

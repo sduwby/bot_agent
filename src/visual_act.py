@@ -122,6 +122,7 @@ class VisualACTTrainingConfig:
     device: str = "mps"
     train_episodes_per_task: int = 80
     validation_episodes_per_task: int = 20
+    dagger_data: Path | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -130,6 +131,14 @@ class VisualACTTrainingConfig:
         object.__setattr__(
             self, "output_dir", Path(self.output_dir).expanduser().resolve()
         )
+        if self.dagger_data is not None:
+            object.__setattr__(
+                self,
+                "dagger_data",
+                Path(self.dagger_data).expanduser().resolve(),
+            )
+            if not self.dagger_data.is_file():
+                raise ValueError(f"dagger_data 不存在：{self.dagger_data}")
         _require_positive_int(self.resolution, "resolution")
         _require_positive_int(self.chunk_size, "chunk_size")
         _require_positive_int(self.n_action_steps, "n_action_steps")
@@ -194,6 +203,7 @@ class VisualACTTrainingSummary:
     batch_size: int
     vision_backbone: str
     tasks_selected: tuple[str, ...]
+    dagger_data: str | None
     duration_seconds: float
     peak_rss_mb: float
     tasks: tuple[VisualTaskTrainingResult, ...]
@@ -898,6 +908,33 @@ def _write_metrics_jsonl(path: Path, rows: Sequence[Mapping[str, object]]) -> No
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _merge_visual_dagger(
+    data: dict[str, VisualTaskData], config: VisualACTTrainingConfig
+) -> None:
+    """把视觉 DAgger 补采 episode 合并进对应任务的训练数据。"""
+    from visual_dagger_collect import (
+        build_visual_dagger_transitions,
+        load_visual_dagger_episodes,
+    )
+
+    dagger = load_visual_dagger_episodes(config.dagger_data)
+    env_id = str(dagger["env_id"])
+    if env_id not in config.tasks:
+        raise VisualACTError(
+            f"dagger 数据针对 {env_id}，但训练任务只包含 {config.tasks}"
+        )
+    merged = build_visual_dagger_transitions(
+        data[env_id],
+        dagger,
+        resolution=config.resolution,
+    )
+    print(
+        f"视觉 DAgger 合并：{env_id} 追加 {dagger['n_episodes']} 个 episode / "
+        f"{dagger['total_labeled_transitions']} 条 recovery transition"
+    )
+    data[env_id] = merged
+
+
 def train_visual_act(
     config: VisualACTTrainingConfig,
 ) -> VisualACTTrainingSummary:
@@ -906,6 +943,8 @@ def train_visual_act(
     _prepare_output_directory(config.output_dir)
     device = _select_device(config.device)
     data = load_visual_dataset(config)
+    if config.dagger_data is not None:
+        _merge_visual_dagger(data, config)
     results: list[VisualTaskTrainingResult] = []
     for env_id in config.tasks:
         results.append(_train_one_task(data[env_id], config))
@@ -931,6 +970,7 @@ def train_visual_act(
         batch_size=config.batch_size,
         vision_backbone=config.vision_backbone,
         tasks_selected=config.tasks,
+        dagger_data=str(config.dagger_data) if config.dagger_data else None,
         duration_seconds=round(time.perf_counter() - started, 6),
         peak_rss_mb=_peak_rss_mb(),
         tasks=tuple(results),
