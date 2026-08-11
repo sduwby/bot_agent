@@ -1,0 +1,28 @@
+{
+  "schema_version": "maniskill_lerobot_pipeline_v1",
+  "created_at": "2026-08-10T11:52:12.659808+00:00",
+  "source_summary": "/Users/fittenwby/bot_agent/runs/maniskill_expert/week11-200/summary.json",
+  "output_dir": "/Users/fittenwby/bot_agent/runs/maniskill_lerobot/week15-full",
+  "repo_id": "bot-agent/maniskill-week11",
+  "fps": 20,
+  "include_camera": false,
+  "tasks": [
+    {
+      "env_id": "PickCube-v1",
+      "episodes": 100,
+      "frames": 1904,
+      "errors": 0
+    },
+    {
+      "env_id": "PushCube-v1",
+      "episodes": 100,
+      "frames": 1353,
+      "errors": 0
+    }
+  ],
+  "total_episodes": 200,
+  "total_frames": 3257,
+  "total_errors": 0,
+  "duration_seconds": 6.421585,
+  "complete": true
+}
