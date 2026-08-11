@@ -167,9 +167,9 @@
 | 8 同步文档 [Mac] | ✅ 完成 | design/plan/总计划已回填 |
 
 剩余工作（4060 或后续轮次）：
-1. ✅ 已完成：week17-c4（1500 step，commit `56e2aea`）与 **20k step 双配置**（`week17-c4-20k`、`week17-c8-20k`，commit `196d34c`，git LFS 共约 1.2GB）。
-2. ✅ 20k 训练结果（live rollout）：week17-c4-20k = PickCube 6/10 + PushCube 9/10 = **15/20（75%）**；week17-c8-20k 训练完成但 rollout 待 Mac `--chunk-compare` 统一评测（4060 自动 rollout 因 WSL GPU 挂死被跳过）。
-3. Mac 上 `run_generalization.py --chunk-compare c4-20k:4:runs/maniskill_act/week17-c4-20k,c8-20k:8:runs/maniskill_act/week17-c8-20k` 补齐 20k 同量级 chunk 对比。
+1. ✅ 已完成：PickCube DAgger recovery 补采（`src/visual_dagger_collect.py`，视觉 ACT 版 RecoveryExpert + live RGB 采集；两轮合并 31 episode / 153 transitions，`runs/dagger/week17-visual-dagger-pick-merged.npz`）。
+2. ✅ 已完成：PickCube 30k 重训（`week17-pick-fix-30k`，chunk 8/n4，128×128，batch 8，30k step，合并 DAgger 数据 train=1665 transitions，best_step 28000、val loss 0.141，训练 23.7 min；产物 git LFS 回传）。
+3. ⏳ Mac 上跑权威测评：`--task PickCube-v1` 的分布内/外 + `--chunk-compare` 对比 c8-20k / c4-20k（4060 侧 auto-eval PickCube in-dist 3/10，c8-20k 基线 1/10，是否真正学会 z 抬升待 Mac 逐帧诊断确认）。
 4. 训练产物回传完成后，恢复 `.gitignore` 对 `runs/` 的忽略（当前为临时放开以便 git 同步数据与产物）。
 5. 若需更强 OOD 结论，可扩分布外 seed 集或单开 background/lighting/pose 归因。
 
