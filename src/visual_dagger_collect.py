@@ -20,9 +20,11 @@ from behavior_cloning import BehaviorCloningError, observation_to_state
 from dagger_collect import (
     RECOVERY_SCALE,
     SETTLE_DIST,
+    GraspRecoveryExpert,
     RecoveryExpert,
     _obj_goal_distance,
     _scalar_bool,
+    _vector,
 )
 from lerobot_act import (
     ACTION_DIM,
@@ -40,6 +42,10 @@ from visual_act import (
 )
 
 VISUAL_DAGGER_SCHEMA_VERSION = "maniskill_visual_dagger_recovery_v1"
+
+# "grasp" 接管模式：未抓取但 TCP 已到 cube 高度且水平对齐即视为抓取窗口。
+GRASP_Z_TOL = 0.04
+GRASP_XY_ZONE = 0.10
 
 
 def _split_observation(
@@ -67,11 +73,18 @@ def collect_visual_dagger_episodes(
     takeover_zone: float = 0.10,
     min_segment: int = 2,
     env_id: str = "PickCube-v1",
+    takeover: str = "lift",
 ) -> dict[str, object]:
     """DAgger 接管模式：视觉 ACT rollout 到达末端停滞区后，专家接管到成功。
 
     记录接管点到成功/终止的完整 (image, robot_state, env_state, expert_action)
     轨迹，使补采数据同时包含 move 与 settle 阶段。
+
+    ``takeover`` 指定接管策略与恢复专家：
+    - "lift"：已抓取且 |obj-goal| <= takeover_zone 后由 ``RecoveryExpert``
+      标注抬升+静止（第一轮补采）；
+    - "grasp"：未抓取但 TCP 已到 cube 高度且水平对齐后由
+      ``GraspRecoveryExpert`` 标注闭爪+抬升+静止（第二轮补采）。
     """
     if not seeds:
         raise ValueError("seeds 不能为空")
@@ -82,6 +95,8 @@ def collect_visual_dagger_episodes(
         checked_seeds.append(seed)
     if len(set(checked_seeds)) != len(checked_seeds):
         raise ValueError("seeds 不能重复")
+    if takeover not in ("lift", "grasp"):
+        raise ValueError("takeover 只支持 lift 或 grasp")
     if takeover_zone <= 0:
         raise ValueError("takeover_zone 必须为正数")
     if max_steps <= 0:
@@ -98,7 +113,9 @@ def collect_visual_dagger_episodes(
         policy_dir, device=device, resolution=resolution, tasks=[env_id]
     )
     policy = policies[env_id]
-    expert = RecoveryExpert()
+    expert: RecoveryExpert | GraspRecoveryExpert = (
+        GraspRecoveryExpert() if takeover == "grasp" else RecoveryExpert()
+    )
     episode_images: list[np.ndarray] = []
     episode_robot: list[np.ndarray] = []
     episode_env: list[np.ndarray] = []
@@ -133,9 +150,22 @@ def collect_visual_dagger_episodes(
                 ).astype(np.uint8)
                 grasped = _scalar_bool(observation, "is_grasped")
                 distance = _obj_goal_distance(observation)
-                if not taken_over and grasped and distance <= takeover_zone:
-                    taken_over = True
-                    takeover_episodes += 1
+                if not taken_over:
+                    if takeover == "grasp":
+                        tcp = _vector(observation, "tcp_pose", 3)
+                        obj = _vector(observation, "obj_pose", 3)
+                        aligned = (
+                            abs(tcp[2] - obj[2]) <= GRASP_Z_TOL
+                            and float(
+                                np.linalg.norm(tcp[:2] - obj[:2])
+                            ) <= GRASP_XY_ZONE
+                        )
+                        if not grasped and aligned:
+                            taken_over = True
+                            takeover_episodes += 1
+                    elif grasped and distance <= takeover_zone:
+                        taken_over = True
+                        takeover_episodes += 1
                 if taken_over:
                     expert_action = expert.act(observation)
                     if expert_action is None:
@@ -176,6 +206,7 @@ def collect_visual_dagger_episodes(
         "seeds": list(checked_seeds),
         "takeover_zone": takeover_zone,
         "min_segment": min_segment,
+        "takeover": takeover,
         "takeover_episodes": takeover_episodes,
         "n_episodes": len(episode_lengths),
         "episode_lengths": episode_lengths,
@@ -376,6 +407,9 @@ def parse_args(argv: list[str] | None = None) -> Any:
     parser.add_argument("--max-steps", type=int, default=50)
     parser.add_argument("--takeover-zone", type=float, default=0.10)
     parser.add_argument("--min-segment", type=int, default=2)
+    parser.add_argument("--takeover", type=str, default="lift",
+                        choices=("lift", "grasp"),
+                        help="接管策略：lift=已抓取补抬升，grasp=未抓上补闭爪")
     parser.add_argument("--task", type=str, default="PickCube-v1")
     return parser.parse_args(argv)
 
@@ -397,10 +431,12 @@ def main(argv: list[str] | None = None) -> int:
             takeover_zone=args.takeover_zone,
             min_segment=args.min_segment,
             env_id=args.task,
+            takeover=args.takeover,
         )
         save_visual_dagger_episodes(payload, output)
         print(
-            f"视觉 DAgger 补采完成：{payload['n_episodes']} 个 episode，"
+            f"视觉 DAgger 补采完成（{payload['takeover']}）："
+            f"{payload['n_episodes']} 个 episode，"
             f"{payload['total_labeled_transitions']} 条 recovery transition，"
             f"接管 episode {payload['takeover_episodes']}，"
             f"rollout {payload['total_rollout_steps']} 步"

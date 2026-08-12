@@ -55,6 +55,33 @@ class RecoveryExpert:
         return np.concatenate((delta, [-1.0])).astype(np.float32)
 
 
+class GraspRecoveryExpert:
+    """从"到达 cube 高度但未抓上"状态恢复：对齐下降 → 闭爪 → 抬升 → 静止。
+
+    未抓取时张开夹爪向 cube 逼近，进入抓取窗口后闭爪；抓取成功后复用
+    ``RecoveryExpert`` 的抬升+静止逻辑。几何驱动、不依赖相位，始终返回动作。
+
+    - 未抓取且 |tcp-obj| >  GRASP_TOL：向 obj 移动（张开夹爪）；
+    - 未抓取且 |tcp-obj| <= GRASP_TOL：向 obj 移动（闭爪）；
+    - 已抓取：复用 RecoveryExpert（抬升到 goal + 静止）。
+    """
+
+    GRASP_TOL = 0.04
+
+    def __init__(self) -> None:
+        self._lift_expert = RecoveryExpert()
+
+    def act(self, observation: Mapping[str, object]) -> np.ndarray:
+        if _scalar_bool(observation, "is_grasped"):
+            return self._lift_expert.act(observation)
+        tcp = _vector(observation, "tcp_pose", 3)
+        obj = _vector(observation, "obj_pose", 3)
+        distance = float(np.linalg.norm(tcp - obj))
+        gripper = -1.0 if distance <= self.GRASP_TOL else 1.0
+        delta = np.clip((obj - tcp) / RECOVERY_SCALE, -1.0, 1.0)
+        return np.concatenate((delta, [gripper])).astype(np.float32)
+
+
 def _vector(observation: Mapping[str, object], key: str, size: int) -> np.ndarray:
     extra = observation.get("extra")
     if not isinstance(extra, Mapping) or key not in extra:

@@ -11,6 +11,7 @@ import pytest
 pytest.importorskip("torch")
 
 from behavior_cloning import ACTION_DIM  # noqa: E402
+from dagger_collect import GraspRecoveryExpert, RecoveryExpert  # noqa: E402
 from lerobot_act import ENV_STATE_DIM, ROBOT_STATE_DIM  # noqa: E402
 from visual_act import (  # noqa: E402
     VisualACTTrainingConfig,
@@ -199,6 +200,83 @@ def _recovery_observation(
     }
 
 
+# ---------------------------------------------------------------------------
+# GraspRecoveryExpert（第二轮：接近但未抓上 → 闭爪）
+# ---------------------------------------------------------------------------
+
+
+def _grasp_observation(
+    *, tcp: list[float], obj: list[float], goal: list[float], grasped: bool
+) -> dict[str, object]:
+    return _recovery_observation(
+        tcp=tcp, obj=obj, goal=goal, grasped=grasped
+    )
+
+
+def test_grasp_expert_opens_gripper_when_far() -> None:
+    expert = GraspRecoveryExpert()
+    obs = _grasp_observation(
+        tcp=[0.0, 0.0, 0.15], obj=[0.0, 0.0, 0.1],
+        goal=[0.2, 0.0, 0.1], grasped=False,
+    )
+    action = expert.act(obs)
+    assert action.shape == (ACTION_DIM,)
+    # 未进入抓取窗口：保持张开，并向 cube 下降
+    assert action[3] == 1.0
+    assert action[2] < 0.0
+
+
+def test_grasp_expert_closes_gripper_when_aligned() -> None:
+    expert = GraspRecoveryExpert()
+    obs = _grasp_observation(
+        tcp=[0.0, 0.0, 0.1], obj=[0.0, 0.0, 0.1],
+        goal=[0.2, 0.0, 0.1], grasped=False,
+    )
+    action = expert.act(obs)
+    assert action.shape == (ACTION_DIM,)
+    # 已到 cube 高度且对齐：闭爪
+    assert action[3] == -1.0
+
+
+def test_grasp_expert_lifts_after_grasp() -> None:
+    expert = GraspRecoveryExpert()
+    obs = _grasp_observation(
+        tcp=[0.0, 0.0, 0.1], obj=[0.0, 0.0, 0.1],
+        goal=[0.2, 0.0, 0.2], grasped=True,
+    )
+    action = expert.act(obs)
+    assert action.shape == (ACTION_DIM,)
+    # 已抓取：向 goal 抬升，闭爪保持
+    assert action[3] == -1.0
+    assert action[2] > 0.0
+
+
+def test_grasp_expert_settles_at_goal() -> None:
+    expert = GraspRecoveryExpert()
+    obs = _grasp_observation(
+        tcp=[0.2, 0.0, 0.2], obj=[0.2, 0.0, 0.2],
+        goal=[0.2, 0.0, 0.2], grasped=True,
+    )
+    action = expert.act(obs)
+    np.testing.assert_array_equal(action, [0.0, 0.0, 0.0, -1.0])
+
+
+def test_grasp_expert_far_from_goal_moves_toward_goal() -> None:
+    expert = GraspRecoveryExpert()
+    obs = _grasp_observation(
+        tcp=[0.0, 0.0, 0.1], obj=[0.0, 0.0, 0.1],
+        goal=[0.2, 0.0, 0.1], grasped=True,
+    )
+    action = expert.act(obs)
+    assert action[0] > 0.0
+    assert action[3] == -1.0
+
+
+# ---------------------------------------------------------------------------
+# fake env 采集（不依赖 Unity）
+# ---------------------------------------------------------------------------
+
+
 def test_collect_visual_dagger_with_fake_env(monkeypatch: Any, tmp_path: Path) -> None:
     class FakePolicy:
         def reset(self) -> None:
@@ -258,7 +336,91 @@ def test_collect_visual_dagger_with_fake_env(monkeypatch: Any, tmp_path: Path) -
     assert payload["n_episodes"] >= 1
     assert payload["total_labeled_transitions"] >= 1
     assert payload["takeover_episodes"] >= 1
+    assert payload["takeover"] == "lift"
     assert payload["images"].shape[-1] == 3
     assert payload["robot_state"].shape[1] == ROBOT_STATE_DIM
     assert payload["env_state"].shape[1] == ENV_STATE_DIM
     assert payload["actions"].shape[1] == ACTION_DIM
+
+
+def test_collect_visual_dagger_grasp_takeover(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    class FakePolicy:
+        def reset(self) -> None:
+            pass
+
+        def act(self, observation: object, image: object) -> np.ndarray:
+            return np.zeros(ACTION_DIM, dtype=np.float32)
+
+    def fake_load(policy_dir: object, *, device: str, resolution: int, tasks: object) -> dict[str, object]:
+        return {"PickCube-v1": FakePolicy()}
+
+    class FakeEnv:
+        def __init__(self) -> None:
+            self.step_count = 0
+
+        def reset(self, seed: int | None = None) -> tuple[dict[str, object], dict[str, object]]:
+            # 初始即"到达 cube 高度但未抓上"：满足 grasp 接管条件
+            return (
+                _recovery_observation(
+                    tcp=[0.0, 0.0, 0.1], obj=[0.0, 0.0, 0.1],
+                    goal=[0.1, 0.0, 0.1], grasped=False,
+                ),
+                {},
+            )
+
+        def render(self) -> np.ndarray:
+            return np.zeros((RES * 4, RES * 4, 3), dtype=np.uint8)
+
+        def step(self, action: object) -> tuple[dict[str, object], float, bool, bool, dict[str, object]]:
+            self.step_count += 1
+            # 闭爪一步后即抓取成功，随后由专家抬升+静止
+            grasped = self.step_count >= 2
+            return (
+                _recovery_observation(
+                    tcp=[0.0, 0.0, 0.1], obj=[0.0, 0.0, 0.1],
+                    goal=[0.1, 0.0, 0.1], grasped=grasped,
+                ),
+                0.0,
+                False,
+                False,
+                {"success": self.step_count >= 6},
+            )
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(
+        "visual_dagger_collect.load_visual_act_checkpoints", fake_load
+    )
+    payload = collect_visual_dagger_episodes(
+        tmp_path / "policy",
+        seeds=[0, 1],
+        resolution=RES,
+        env_factory=lambda config: FakeEnv(),
+        device="cpu",
+        max_steps=10,
+        takeover_zone=0.1,
+        min_segment=2,
+        takeover="grasp",
+    )
+    assert payload["takeover"] == "grasp"
+    assert payload["n_episodes"] >= 1
+    assert payload["total_labeled_transitions"] >= 1
+    assert payload["takeover_episodes"] >= 1
+    # 补采动作应包含闭爪（gripper = -1）
+    actions = np.asarray(payload["actions"], dtype=np.float32)
+    assert actions.shape[1] == ACTION_DIM
+    assert float(actions[:, 3].min()) == -1.0
+
+
+def test_collect_rejects_unknown_takeover(monkeypatch: Any, tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="takeover"):
+        collect_visual_dagger_episodes(
+            tmp_path / "policy",
+            seeds=[0],
+            resolution=RES,
+            device="cpu",
+            takeover="bogus",
+        )
