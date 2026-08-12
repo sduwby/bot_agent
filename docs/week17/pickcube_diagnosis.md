@@ -138,6 +138,32 @@ python src/run_visual_act.py \
 
 **下一步方向**：对"到达 cube 高度但未抓上"状态做第二轮 DAgger 补采（标注闭合夹爪动作），或对抓取阶段数据增权。
 
+### 8.1 第二轮补采（grasp recovery，2026-08-12）
+
+已新增 `GraspRecoveryExpert`（`src/dagger_collect.py`）：未抓取时张开夹爪向 cube 逼近、进入抓取窗口（`|tcp-obj| <= 0.04`）后闭爪，抓取后复用 RecoveryExpert 抬升+静止；`src/visual_dagger_collect.py` 新增 `--takeover grasp` 接管策略——未抓取但 TCP 已到 cube 高度（z 容差 0.04）且水平对齐（0.10）即由专家接管标注"闭爪+抬升+静止"。
+
+**4060 采集**（base policy `week17-pick-fix-30k`，seeds 601–609 诊断失败集 + 610–619/700–709 新 OOD 集）：
+
+- 全量：`runs/dagger/week17-visual-dagger-pick-grasp.npz`（27 episode / 479 transition / 接管 27，rollout 685 步）；
+- 成功过滤：`runs/dagger/week17-visual-dagger-pick-grasp-clean.npz`（20 episode / 185 transition，闭爪动作占比 94%）——专家完整 grasp→place 的干净 recovery 监督，用于重训；7 个 seed（606/607/610/616/618/700/701）专家自身 50 步内未抓上，不纳入重训集；
+- 诊断集 601/602/603/605/609 均已由专家成功恢复 grasp→place，印证"闭爪时机"确为剩余瓶颈；606/607 为更难的抓取位姿，留给后续迭代。
+
+### 8.2 第二轮重训结果（2026-08-12，4060）
+
+用 `-clean.npz`（20 episode / 185 transition）与原始 train 合并重训：`runs/maniskill_act/week17-pick-grasp-30k`，配置与 30k 基线一致（chunk 8/n4、128×128、batch 8、30k step、seed 20260816），train=1697 transitions、val=392，best_step 19750、best_val 0.1414，训练 1475 s（降噪运行：省电计划 + GPU 锁频 1500 MHz，全程功耗 ≤39W、温度 ≤56°C，未触发 WSL GPU 挂死）。
+
+**4060 侧评测**（`run_generalization.py`，扰动 background+lighting+pose）：
+
+| 场景 | 30k 基线（r1，Mac 复评） | 第二轮 grasp-30k（4060） |
+| --- | ---: | ---: |
+| 分布内（seed 500–509） | 4/10 (40%) | 3/10 (30%) |
+| 分布外（seed 600–609 扰动） | 3/10 (30%) | **4/10 (40%)** |
+| gap | +10pp | −10pp |
+
+**结论**：第二轮补采整体持平基线——分布外 3→4/10（提升 1 个 seed），分布内 4→3/10（回退 1 个 seed），均落在 10 seed 的噪声范围；分布外 6 个失败全部仍为 `truncated_only`（`grasp_failures=0`），**抓取瓶颈未实质突破**，与补采时专家自身也无法在 606/607 等 seed 上 50 步内抓上一致——闭爪时机之外还存在更难的接近/位姿问题。
+
+**下一步候选**：① 抓取阶段数据增权或对 `-clean` 之外的高质量接近+闭爪帧单独过采样；② 40k 步或 z 分量加权（5.2）；③ 补采时放宽 `GRASP_XY_ZONE` 采集更多"接近但不闭合"的错帧；④ 更严格挑选 base policy（用 best-step rollout 而非 best-validation 选点）。
+
 ## 9. 记录说明
 
 - 本诊断基于 chunk 8 checkpoint；chunk 4 的 PickCube 失败大概率同因（评测中 PickCube 单任务同样接近 0%）。
