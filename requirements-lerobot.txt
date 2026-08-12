@@ -1,6 +1,7 @@
 # 第 13 周：LeRobot 0.6.1 低维 ACT 独立环境（Python 3.12）。
 # 第 15 周：`lerobot[dataset]` 提供 LeRobotDataset v3 数据管线。
+# 第 18 周：`lerobot[smolvla]` 提供 SmolVLA 探针依赖（transformers/timm/tokenizers）。
 # macOS 还需执行：brew install molten-vk
 mani_skill==3.0.1
-lerobot[dataset]==0.6.1
+lerobot[dataset,smolvla]==0.6.1
 pin==4.1.0; sys_platform == "darwin"
