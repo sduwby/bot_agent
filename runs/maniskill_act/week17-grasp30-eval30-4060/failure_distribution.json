@@ -1,0 +1,15 @@
+{
+  "tasks": [
+    {
+      "env_id": "PickCube-v1",
+      "total_failures": 15,
+      "phase_counts": {
+        "truncated_only": 14,
+        "grasped_not_placed": 1
+      },
+      "grasp_failures": 1,
+      "placed_but_not_static": 0,
+      "truncated_only": 14
+    }
+  ]
+}

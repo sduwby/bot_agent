@@ -1,0 +1,87 @@
+{
+  "schema_version": "maniskill_act_generalization_v1",
+  "created_at": "2026-08-12T06:26:56.961134+00:00",
+  "checkpoint_dir": "/root/bot_agent/runs/maniskill_act/week17-pick-align3-30k",
+  "output_dir": "/root/bot_agent/runs/maniskill_act/week17-align3-eval10chk",
+  "device": "cuda",
+  "resolution": 128,
+  "perturbation": {
+    "background": true,
+    "lighting": true,
+    "pose": true,
+    "schema_version": "maniskill_perturbation_v1"
+  },
+  "in_distribution": {
+    "overall": {
+      "episodes": 10,
+      "successes": 6,
+      "success_rate": 0.6,
+      "mean_steps": 33.7,
+      "mean_inference_ms": 182.17697409986044,
+      "exceptions": 0,
+      "nonfinite_actions": 0
+    },
+    "PickCube-v1": {
+      "episodes": 10,
+      "successes": 6,
+      "failures": 4,
+      "success_rate": 0.6,
+      "mean_steps": 33.7,
+      "exceptions": 0
+    }
+  },
+  "out_of_distribution": {
+    "overall": {
+      "episodes": 10,
+      "successes": 5,
+      "success_rate": 0.5,
+      "mean_steps": 33.9,
+      "mean_inference_ms": 133.90893340013008,
+      "exceptions": 0,
+      "nonfinite_actions": 0
+    },
+    "PickCube-v1": {
+      "episodes": 10,
+      "successes": 5,
+      "failures": 5,
+      "success_rate": 0.5,
+      "mean_steps": 33.9,
+      "exceptions": 0
+    }
+  },
+  "gap": {
+    "PickCube-v1": 0.1,
+    "overall": 0.1
+  },
+  "failure_distribution": {
+    "tasks": [
+      {
+        "env_id": "PickCube-v1",
+        "total_failures": 5,
+        "phase_counts": {
+          "truncated_only": 5
+        },
+        "grasp_failures": 0,
+        "placed_but_not_static": 0,
+        "truncated_only": 5
+      }
+    ]
+  },
+  "hyperparameters": {
+    "action_smoothing": [
+      {
+        "action_smoothing": 1.0,
+        "success_rate": 0.5,
+        "total_episodes": 10,
+        "total_successes": 5,
+        "mean_steps": 33.9,
+        "nonfinite_actions": 0,
+        "exceptions": 0
+      }
+    ],
+    "chunk_compare": [],
+    "smoothing_candidates": [
+      1.0
+    ]
+  }
+}

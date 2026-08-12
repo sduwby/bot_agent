@@ -1,0 +1,88 @@
+{
+  "schema_version": "maniskill_act_generalization_v1",
+  "created_at": "2026-08-12T07:28:06.149569+00:00",
+  "checkpoint_dir": "/root/bot_agent/runs/maniskill_act/week17-pick-res224-30k",
+  "output_dir": "/root/bot_agent/runs/maniskill_act/week17-res224-eval30",
+  "device": "cuda",
+  "resolution": 128,
+  "perturbation": {
+    "background": true,
+    "lighting": true,
+    "pose": true,
+    "schema_version": "maniskill_perturbation_v1"
+  },
+  "in_distribution": {
+    "overall": {
+      "episodes": 30,
+      "successes": 1,
+      "success_rate": 0.03333333333333333,
+      "mean_steps": 48.93333333333333,
+      "mean_inference_ms": 184.18361366666997,
+      "exceptions": 0,
+      "nonfinite_actions": 0
+    },
+    "PickCube-v1": {
+      "episodes": 30,
+      "successes": 1,
+      "failures": 29,
+      "success_rate": 0.03333333333333333,
+      "mean_steps": 48.93333333333333,
+      "exceptions": 0
+    }
+  },
+  "out_of_distribution": {
+    "overall": {
+      "episodes": 30,
+      "successes": 1,
+      "success_rate": 0.03333333333333333,
+      "mean_steps": 49.03333333333333,
+      "mean_inference_ms": 173.88968119997227,
+      "exceptions": 0,
+      "nonfinite_actions": 0
+    },
+    "PickCube-v1": {
+      "episodes": 30,
+      "successes": 1,
+      "failures": 29,
+      "success_rate": 0.03333333333333333,
+      "mean_steps": 49.03333333333333,
+      "exceptions": 0
+    }
+  },
+  "gap": {
+    "PickCube-v1": 0.0,
+    "overall": 0.0
+  },
+  "failure_distribution": {
+    "tasks": [
+      {
+        "env_id": "PickCube-v1",
+        "total_failures": 29,
+        "phase_counts": {
+          "truncated_only": 27,
+          "grasped_not_placed": 2
+        },
+        "grasp_failures": 2,
+        "placed_but_not_static": 0,
+        "truncated_only": 27
+      }
+    ]
+  },
+  "hyperparameters": {
+    "action_smoothing": [
+      {
+        "action_smoothing": 1.0,
+        "success_rate": 0.03333333333333333,
+        "total_episodes": 30,
+        "total_successes": 1,
+        "mean_steps": 49.03333333333333,
+        "nonfinite_actions": 0,
+        "exceptions": 0
+      }
+    ],
+    "chunk_compare": [],
+    "smoothing_candidates": [
+      1.0
+    ]
+  }
+}

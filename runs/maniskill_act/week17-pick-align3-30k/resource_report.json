@@ -1,0 +1,13 @@
+{
+  "schema_version": "maniskill_visual_act_v1",
+  "created_at": "2026-08-12T06:14:02.771156+00:00",
+  "device": "cuda",
+  "resolution": 128,
+  "batch_size": 8,
+  "peak_rss_mb_train": 295.092,
+  "peak_rss_mb_total": 966.127,
+  "training_seconds": 1530.563419,
+  "evaluation_seconds": 37.074611,
+  "mean_inference_ms": 152.516036,
+  "total_episodes": 10
+}
