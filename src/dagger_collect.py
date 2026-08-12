@@ -56,17 +56,21 @@ class RecoveryExpert:
 
 
 class GraspRecoveryExpert:
-    """从"到达 cube 高度但未抓上"状态恢复：对齐下降 → 闭爪 → 抬升 → 静止。
+    """从"到达 cube 高度但未抓上"状态恢复：水平修正 → 下降闭合 → 抬升 → 静止。
 
-    未抓取时张开夹爪向 cube 逼近，进入抓取窗口后闭爪；抓取成功后复用
-    ``RecoveryExpert`` 的抬升+静止逻辑。几何驱动、不依赖相位，始终返回动作。
+    未抓取时按两段式时序给出修正动作，避免"边下降边水平移动"导致又一次错过：
 
-    - 未抓取且 |tcp-obj| >  GRASP_TOL：向 obj 移动（张开夹爪）；
-    - 未抓取且 |tcp-obj| <= GRASP_TOL：向 obj 移动（闭爪）；
-    - 已抓取：复用 RecoveryExpert（抬升到 goal + 静止）。
+    - 水平偏差 ``xy_dist >= XY_ALIGN_TOL``：**只做水平修正**——水平分量把 TCP 移到
+      obj 正上方（z 增量置 0，保持当前高度），夹爪保持闭合；
+    - 水平偏差 ``xy_dist <  XY_ALIGN_TOL``：**下降+闭合**——朝 obj 移动（含 z），闭爪；
+    - 已抓取：复用 ``RecoveryExpert``（抬升到 goal + 静止）。
+
+    几何驱动、不依赖相位，始终返回动作。``GRASP_TOL`` 保留用于兼容调用方；
+    本实现以水平/垂直分量分别驱动，不再用三维距离单一判断。
     """
 
     GRASP_TOL = 0.04
+    XY_ALIGN_TOL = 0.02
 
     def __init__(self) -> None:
         self._lift_expert = RecoveryExpert()
@@ -76,10 +80,12 @@ class GraspRecoveryExpert:
             return self._lift_expert.act(observation)
         tcp = _vector(observation, "tcp_pose", 3)
         obj = _vector(observation, "obj_pose", 3)
-        distance = float(np.linalg.norm(tcp - obj))
-        gripper = -1.0 if distance <= self.GRASP_TOL else 1.0
+        xy_dist = float(np.linalg.norm(tcp[:2] - obj[:2]))
         delta = np.clip((obj - tcp) / RECOVERY_SCALE, -1.0, 1.0)
-        return np.concatenate((delta, [gripper])).astype(np.float32)
+        if xy_dist >= self.XY_ALIGN_TOL:
+            # 只做水平修正：z 增量置 0，夹爪保持闭合。
+            delta[2] = 0.0
+        return np.concatenate((delta, [-1.0])).astype(np.float32)
 
 
 def _vector(observation: Mapping[str, object], key: str, size: int) -> np.ndarray:

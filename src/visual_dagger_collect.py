@@ -43,9 +43,9 @@ from visual_act import (
 
 VISUAL_DAGGER_SCHEMA_VERSION = "maniskill_visual_dagger_recovery_v1"
 
-# "grasp" 接管模式：未抓取但 TCP 已到 cube 高度且水平对齐即视为抓取窗口。
+# "grasp" 接管模式：未抓取但 TCP 已到 cube 高度且水平有偏差即视为抓取窗口。
+# 水平窗口由 --align-zone-min/--align-zone-max 控制，不再用固定 GRASP_XY_ZONE。
 GRASP_Z_TOL = 0.04
-GRASP_XY_ZONE = 0.10
 
 
 def _split_observation(
@@ -74,6 +74,8 @@ def collect_visual_dagger_episodes(
     min_segment: int = 2,
     env_id: str = "PickCube-v1",
     takeover: str = "lift",
+    align_zone_min: float = 0.01,
+    align_zone_max: float = 0.05,
 ) -> dict[str, object]:
     """DAgger 接管模式：视觉 ACT rollout 到达末端停滞区后，专家接管到成功。
 
@@ -83,8 +85,11 @@ def collect_visual_dagger_episodes(
     ``takeover`` 指定接管策略与恢复专家：
     - "lift"：已抓取且 |obj-goal| <= takeover_zone 后由 ``RecoveryExpert``
       标注抬升+静止（第一轮补采）；
-    - "grasp"：未抓取但 TCP 已到 cube 高度且水平对齐后由
-      ``GraspRecoveryExpert`` 标注闭爪+抬升+静止（第二轮补采）。
+    - "grasp"：未抓取但 TCP 已到 cube 高度且水平有偏差
+      （``align_zone_min <= tcp_xy-obj_xy <= align_zone_max``）后由
+      ``GraspRecoveryExpert`` 标注水平修正+闭爪+抬升+静止（第三轮补采）。
+      ``align_zone_min``/``align_zone_max`` 限定"已贴近但水平偏了"的接管窗口，
+      避免把已对准或离太远的样本算进来。
     """
     if not seeds:
         raise ValueError("seeds 不能为空")
@@ -103,6 +108,10 @@ def collect_visual_dagger_episodes(
         raise ValueError("max_steps 必须为正数")
     if resolution <= 0:
         raise ValueError("resolution 必须是正整数")
+    if not (0 <= align_zone_min < align_zone_max):
+        raise ValueError(
+            "align_zone_min 必须 >= 0 且小于 align_zone_max"
+        )
 
     if env_factory is None:
         from lerobot_pipeline import make_render_env
@@ -154,11 +163,10 @@ def collect_visual_dagger_episodes(
                     if takeover == "grasp":
                         tcp = _vector(observation, "tcp_pose", 3)
                         obj = _vector(observation, "obj_pose", 3)
+                        xy_dist = float(np.linalg.norm(tcp[:2] - obj[:2]))
                         aligned = (
                             abs(tcp[2] - obj[2]) <= GRASP_Z_TOL
-                            and float(
-                                np.linalg.norm(tcp[:2] - obj[:2])
-                            ) <= GRASP_XY_ZONE
+                            and align_zone_min <= xy_dist <= align_zone_max
                         )
                         if not grasped and aligned:
                             taken_over = True
@@ -205,6 +213,8 @@ def collect_visual_dagger_episodes(
         "resolution": resolution,
         "seeds": list(checked_seeds),
         "takeover_zone": takeover_zone,
+        "align_zone_min": align_zone_min,
+        "align_zone_max": align_zone_max,
         "min_segment": min_segment,
         "takeover": takeover,
         "takeover_episodes": takeover_episodes,
@@ -407,6 +417,15 @@ def parse_args(argv: list[str] | None = None) -> Any:
     parser.add_argument("--max-steps", type=int, default=50)
     parser.add_argument("--takeover-zone", type=float, default=0.10)
     parser.add_argument("--min-segment", type=int, default=2)
+    parser.add_argument(
+        "--align-zone-min", type=float, default=0.01,
+        help="grasp 接管：已贴近 cube 的最小水平偏差（默认 0.01）",
+    )
+    parser.add_argument(
+        "--align-zone-max", type=float, default=0.05,
+        help="grasp 接管：已贴近 cube 的最大水平偏差（默认 0.05，"
+             "替代原 GRASP_XY_ZONE=0.10）",
+    )
     parser.add_argument("--takeover", type=str, default="lift",
                         choices=("lift", "grasp"),
                         help="接管策略：lift=已抓取补抬升，grasp=未抓上补闭爪")
@@ -432,6 +451,8 @@ def main(argv: list[str] | None = None) -> int:
             min_segment=args.min_segment,
             env_id=args.task,
             takeover=args.takeover,
+            align_zone_min=args.align_zone_min,
+            align_zone_max=args.align_zone_max,
         )
         save_visual_dagger_episodes(payload, output)
         print(

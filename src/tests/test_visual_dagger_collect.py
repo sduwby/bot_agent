@@ -221,9 +221,36 @@ def test_grasp_expert_opens_gripper_when_far() -> None:
     )
     action = expert.act(obs)
     assert action.shape == (ACTION_DIM,)
-    # 未进入抓取窗口：保持张开，并向 cube 下降
-    assert action[3] == 1.0
+    # 水平已对齐（xy=0 < XY_ALIGN_TOL）：下降+闭合。
+    assert action[3] == -1.0
     assert action[2] < 0.0
+
+
+def test_grasp_expert_horizontal_correction_keeps_z() -> None:
+    """水平偏差较大时只做水平修正：z 增量置 0、夹爪闭合、水平分量朝 obj。"""
+    expert = GraspRecoveryExpert()
+    obs = _grasp_observation(
+        tcp=[0.05, 0.0, 0.10], obj=[0.0, 0.0, 0.1],
+        goal=[0.2, 0.0, 0.1], grasped=False,
+    )
+    action = expert.act(obs)
+    # xy 偏差 0.05 >= XY_ALIGN_TOL：只修正水平，z 不动，闭爪。
+    assert action[2] == 0.0
+    assert action[0] < 0.0  # 朝 obj（x 减小）
+    assert action[3] == -1.0
+
+
+def test_grasp_expert_small_xy_descends_and_closes() -> None:
+    """水平偏差小于 XY_ALIGN_TOL 时下降+闭合。"""
+    expert = GraspRecoveryExpert()
+    obs = _grasp_observation(
+        tcp=[0.01, 0.0, 0.15], obj=[0.0, 0.0, 0.1],
+        goal=[0.2, 0.0, 0.1], grasped=False,
+    )
+    action = expert.act(obs)
+    assert action[2] < 0.0  # 下降
+    assert action[3] == -1.0  # 闭爪
+    assert action[0] < 0.0  # 仍有轻微水平修正
 
 
 def test_grasp_expert_closes_gripper_when_aligned() -> None:
@@ -270,6 +297,25 @@ def test_grasp_expert_far_from_goal_moves_toward_goal() -> None:
     action = expert.act(obs)
     assert action[0] > 0.0
     assert action[3] == -1.0
+
+
+def test_collect_rejects_invalid_align_zone() -> None:
+    with pytest.raises(ValueError, match="align_zone_min"):
+        collect_visual_dagger_episodes(
+            Path("x"),
+            seeds=[0],
+            takeover="grasp",
+            align_zone_min=0.05,
+            align_zone_max=0.01,
+        )
+    with pytest.raises(ValueError, match="align_zone_min"):
+        collect_visual_dagger_episodes(
+            Path("x"),
+            seeds=[0],
+            takeover="grasp",
+            align_zone_min=-0.01,
+            align_zone_max=0.05,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -361,10 +407,11 @@ def test_collect_visual_dagger_grasp_takeover(
             self.step_count = 0
 
         def reset(self, seed: int | None = None) -> tuple[dict[str, object], dict[str, object]]:
-            # 初始即"到达 cube 高度但未抓上"：满足 grasp 接管条件
+            # 初始"贴到 cube 高度但水平偏差 0.03"：满足 grasp 接管条件
+            # （align_zone_min=0.01 <= 0.03 <= align_zone_max=0.05）
             return (
                 _recovery_observation(
-                    tcp=[0.0, 0.0, 0.1], obj=[0.0, 0.0, 0.1],
+                    tcp=[0.03, 0.0, 0.1], obj=[0.0, 0.0, 0.1],
                     goal=[0.1, 0.0, 0.1], grasped=False,
                 ),
                 {},

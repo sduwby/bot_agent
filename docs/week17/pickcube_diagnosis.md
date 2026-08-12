@@ -164,6 +164,120 @@ python src/run_visual_act.py \
 
 **下一步候选**：① 抓取阶段数据增权或对 `-clean` 之外的高质量接近+闭爪帧单独过采样；② 40k 步或 z 分量加权（5.2）；③ 补采时放宽 `GRASP_XY_ZONE` 采集更多"接近但不闭合"的错帧；④ 更严格挑选 base policy（用 best-step rollout 而非 best-validation 选点）。
 
+### 8.3 A/B 分析（2026-08-12）
+
+**B：扩大评估集到 30 seed**（排除 10-seed 噪声）：
+
+| 版本 | 分布内 (30 seed) | 分布外 (30 seed) | gap |
+| --- | ---: | ---: | ---: |
+| grasp-30k（`week17-grasp-eval30`） | 13/30 (43.3%) | 14/30 (46.7%) | **−3.3pp** |
+
+结论：10-seed 评估噪声极大（±10pp 级别）。30 seed 下分布外 ≈ 分布内，**泛化损失实际仅 −3pp**，但绝对水平仍卡在 ~45%。**评估口径从此固定为 30 seed**（分布内 500–529，分布外 600–629）。
+
+**A：补采数据覆盖检查**（逐样本统计 `runs/dagger/*.npz`）：
+
+| 补采集 | N | grasped 占比 | tcp-obj 水平 (中位/p90) | obj-goal (中位) | 覆盖问题 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| merged（第一轮） | 153 | 100% | 0.014 / 0.029 | 0.042 | **全是"已抓取后送入"，无水平偏差修正样本** |
+| grasp（第二轮） | 479 | 36% | 0.020 / 0.113 | 0.161 | 大多在远离目标时采样，`GRASP_XY_ZONE=0.10` 过宽 |
+| grasp-clean | 185 | 79% | 0.013 / 0.025 | 0.079 | 干净但同样缺"水平偏差→修正"样本 |
+
+结论：两轮补采覆盖了"抬升+送入"和"粗略接近"，但**都未针对性覆盖"末端已贴近 cube（z≈0）但水平偏 1–5cm、需要水平修正后闭合"的失败态**——正是逐帧诊断看到的场景（末端到 cube 高度但 objGoal 不动、空闭合）。失败相位从"抬升缺失"演进到"水平对准缺失"。
+
+### 8.4 第三轮补采方案（目标：水平对准）
+
+**根因**：`GraspRecoveryExpert` 的标注是"从 10cm 外直接冲向 obj 并闭爪"，模型学到"直接逼近"，没学到"偏了先水平修正再闭合"。
+
+**⚠️ 前置：Mac 需先完成以下代码改动并 push（4060 不要用现有代码直接跑）**：
+
+1. `src/visual_dagger_collect.py`：
+   - 采集接管条件由 `GRASP_XY_ZONE=0.10`（过宽）改为"已贴近但水平偏差"：
+     - z 容差保持 `GRASP_Z_TOL=0.04`；
+     - 水平改为 **下界 0.01、上界 0.05**（`0.01 <= |tcp_xy - obj_xy| <= 0.05`），只对"贴到 cube 高度但水平偏了 1–5cm"的状态接管；
+   - 建议把该条件做成 CLI 参数（如 `--align-zone-min` / `--align-zone-max`），便于 4060 调参而不必改代码。
+2. `src/dagger_collect.py` 的 `GraspRecoveryExpert` 标注分两段时序：
+   - `tcp-obj 水平距离 >= 0.02`：只输出**水平移到 obj 正上方**的动作（闭爪保持），**z 不下降**；
+   - `< 0.02`：再**下降+闭合**；抓取后复用 RecoveryExpert 抬升+静止。
+   - 目的：让监督显式出现"先水平修正 → 再闭合"，而非一步到位冲向 obj。
+3. `src/run_visual_act.py`：确认 `--dagger-data` + `--train-episodes-per-task 80+N` 已可用（第二轮已验证）。
+4. 评估口径统一为 **30 seed**（分布内 500–529、分布外 600–629）。
+
+> 以上改动在 Mac 完成并 `git push` 后，4060 `git pull` 再按下面命令执行。
+
+**4060 上需要执行的操作（详细）**：
+
+```bash
+# ── 0. 同步代码与数据 ─────────────────────────────────────────────
+cd /path/to/bot_agent
+git pull origin main
+git lfs pull                       # 若新增了 LFS 产物
+
+# ── 1. 第三轮补采（需 Mac 已实现 §8.4 前置改动）──────────────────
+# 用当前 grasp-30k 诱导失败态，采集"已贴近但水平偏差"的修正监督
+PYTHONPATH=src python src/visual_dagger_collect.py \
+  --policy-dir runs/maniskill_act/week17-pick-grasp-30k \
+  --output runs/dagger/week17-visual-dagger-pick-align3.npz \
+  --seeds 610-619,700-719 \          # 新 OOD seed，避开已诊断集（注意 CLI 用逗号）
+  --takeover grasp \
+  --resolution 128 \
+  --device cuda \
+  --min-segment 3
+# 若加了 --align-zone-min/--align-zone-max，在此传参
+
+# 检查补采质量：应看到 tcp-obj 水平分布在 0.01~0.05、obj-goal 多变
+python -c "
+import numpy as np
+d = np.load('runs/dagger/week17-visual-dagger-pick-align3.npz')
+env = d['env_state']
+tcp_obj_xy = np.linalg.norm(env[:,6:8], axis=1)
+print('N=', len(env), '水平 p10/中位/p90=', np.percentile(tcp_obj_xy,[10,50,90]).round(3))
+"
+
+# ── 2. 重训（30k，合并原始 train + 第三轮补采）────────────────────
+# 关键：补采 episode 插入 train 之后，train_episodes 必须 = 80 + 补采数 N
+# （参考第二轮：20 个补采 episode → --train-episodes-per-task 100）
+PYTHONPATH=src python src/run_visual_act.py \
+  --dataset-dir runs/maniskill_lerobot/week15-cam \
+  --repo-id bot-agent/maniskill-week11 \
+  --task PickCube-v1 \
+  --resolution 128 --batch-size 8 \
+  --training-steps 30000 \
+  --dagger-data runs/dagger/week17-visual-dagger-pick-align3-clean.npz \
+  --train-episodes-per-task <80+N> \
+  --device cuda \
+  --output-dir runs/maniskill_act/week17-pick-align3-30k
+# 注：若采集未成功（N=0 或全被过滤），不要重训，先调采集条件
+
+# ── 3. 4060 本地先 smoke 复评（可选，确认不挂死）─────────────────
+PYTHONPATH=src python src/run_generalization.py \
+  --checkpoint-dir runs/maniskill_act/week17-pick-align3-30k \
+  --output-dir runs/maniskill_act/week17-align3-smoke \
+  --in-seeds 500-502 --ood-seeds 600-602 \
+  --perturbation background,lighting,pose --task PickCube-v1 \
+  --smoothing-values 1.0 --device cuda
+
+# ── 4. 正式 30 seed 评测 ─────────────────────────────────────────
+PYTHONPATH=src python src/run_generalization.py \
+  --checkpoint-dir runs/maniskill_act/week17-pick-align3-30k \
+  --output-dir runs/maniskill_act/week17-align3-eval30 \
+  --in-seeds 500-529 --ood-seeds 600-629 \
+  --perturbation background,lighting,pose --task PickCube-v1 \
+  --smoothing-values 1.0 --device cuda
+
+# ── 5. 产物回传 Mac（git LFS）────────────────────────────────────
+git add runs/maniskill_act/week17-pick-align3-30k runs/dagger/*align3*
+git commit -m "feat(week17): 第三轮水平对准补采与 30k 重训产物"
+git push
+# Mac 端：git pull && git lfs pull 后复评/复诊
+```
+
+**4060 验收判据**（第三轮达标）：
+- 30 seed 分布内 ≥ 60%，或相对 grasp-30k（43.3%）提升 ≥ 10pp；
+- 失败相位中 `grasped_not_placed` 明显减少，`truncated_only` 里"到达 cube 高度但空闭合"占比下降；
+- 产物含 `generalization_report.json`（30 seed）+ 补采 npz + training_summary。
+
+**回退判据**：若第三轮分布内 ≤ 45%（无提升），停止继续在视觉 ACT 上补采，改为：① 提高分辨率到 224 或换 resnet34 验证是否是容量/感知精度问题；② 或接受当前水平、把 PickCube 定为视觉 ACT 弱项，阶段门禁 C 评估时用 PushCube + 已稳定的抬升子技能组合达成。
+
 ## 9. 记录说明
 
 - 本诊断基于 chunk 8 checkpoint；chunk 4 的 PickCube 失败大概率同因（评测中 PickCube 单任务同样接近 0%）。
