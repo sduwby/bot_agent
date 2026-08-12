@@ -37,6 +37,8 @@ runs/maniskill_act/*
 !runs/maniskill_act/week17-c4-20k/
 !runs/maniskill_act/week17-c8-20k/
 !runs/maniskill_act/week17-pick-fix-30k/
+!runs/maniskill_act/week17-pick-grasp-30k/
+!runs/maniskill_act/week17-pick-grasp-30k-eval/
 !runs/dagger/
 src/runs/
 
