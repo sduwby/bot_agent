@@ -171,7 +171,9 @@
 2. ✅ 已完成：PickCube 30k 重训（`week17-pick-fix-30k`，chunk 8/n4，128×128，batch 8，30k step，合并 DAgger 数据 train=1665 transitions，best_step 28000、val loss 0.141，训练 23.7 min；产物 git LFS 回传）。
 3. ✅ 已完成：Mac 复评 + 逐帧复诊（`run_pickcube_diagnose.py` + `docs/week17/pickcube_diagnosis.md` §8）：30k+DAgger 分布内 4/10、分布外 3/10，剩余瓶颈=到达 cube 高度但未抓上（闭爪时机）。
 4. ✅ 已完成：第二轮 grasp recovery 补采（2026-08-12，4060，base `week17-pick-fix-30k`）：`GraspRecoveryExpert` + `--takeover grasp`（未抓取但 TCP 到 cube 高度且水平对齐即接管）；全量 27 episode / 479 transition，成功过滤 `-clean.npz` 20 episode / 185 transition（闭爪占 94%）；诊断集 5/7 seed 专家成功恢复。
-5. ✅ 已完成（2026-08-12，4060）：用 `week17-visual-dagger-pick-grasp-clean.npz` 重训 `week17-pick-grasp-30k`（chunk 8/n4、128、batch 8、30k，best_step 19750、val 0.1414，1475 s 降噪运行）。4060 侧评测：分布内 3/10、分布外 4/10（对比 30k 基线 4/10 vs 3/10，整体持平；OOD 失败仍全为 `truncated_only`，抓取未实质突破，详见 `pickcube_diagnosis.md` §8.2）。候选下一步：抓取帧增权/40k/z 加权/放宽 GRASP_XY_ZONE 再补采。
+5. ✅ 已完成（2026-08-12，4060）：用 `week17-visual-dagger-pick-grasp-clean.npz` 重训 `week17-pick-grasp-30k`（chunk 8/n4、128、batch 8、30k，best_step 19750、val 0.1414，1475 s 降噪运行）。4060 侧评测：分布内 3/10、分布外 4/10（对比 30k 基线 4/10 vs 3/10，整体持平；OOD 失败仍全为 `truncated_only`，抓取未实质突破，详见 `pickcube_diagnosis.md` §8.2）。
+6. ✅ 已完成（2026-08-12，4060）：第三轮水平对准补采（seeds 630–649,720–739，`align3.npz` 36 ep/828 trans，`-clean.npz` 21 ep/199 trans）+ 30k 重训 `week17-pick-align3-30k`（train=1711、best_step 27750、val 0.1409）。4060 30 seed 公平对比 grasp-30k：分布内 13/30 vs 14/30、分布外 8/30 vs 15/30——**整体回退**（核心 seed 500–509 3→6/10、600–609 4→5/10 有提升，但 610–629 11/20→3/20 崩塌），**触发 §8.4 回退判据，停止视觉 ACT 继续补采**（详见 `pickcube_diagnosis.md` §8.5）。
+7. ✅ 已完成（2026-08-12，4060）：分辨率 224 单变量验证 `week17-pick-res224-30k`（resnet18、30k、batch 8，仅 resolution 128→224）——分布内 1/30、分布外 1/30，**严重回退，感知分辨率假说否定**；resnet34 未跑（按用户决定收尾）。**PickCube 定为视觉 ACT 弱项**，门禁 C 改用 PushCube+抬升子技能组合，PickCube 作附注指标（详见 `pickcube_diagnosis.md` §8.6）。
 6. 训练产物回传完成后，恢复 `.gitignore` 对 `runs/` 的忽略（当前为临时放开以便 git 同步数据与产物）。
 7. 若需更强 OOD 结论，可扩分布外 seed 集或单开 background/lighting/pose 归因。
 
