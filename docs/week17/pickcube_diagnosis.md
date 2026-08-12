@@ -172,7 +172,7 @@ python src/run_visual_act.py \
 | --- | ---: | ---: | ---: |
 | grasp-30k（`week17-grasp-eval30`） | 13/30 (43.3%) | 14/30 (46.7%) | **−3.3pp** |
 
-结论：10-seed 评估噪声极大（±10pp 级别）。30 seed 下分布外 ≈ 分布内，**泛化损失实际仅 −3pp**，但绝对水平仍卡在 ~45%。**评估口径从此固定为 30 seed**（分布内 500–529，分布外 600–629）。
+结论：10-seed 评估噪声极大（±10pp 级别）。30 seed 下分布外 ≈ 分布内，**泛化损失实际仅 −3pp**，但绝对水平仍卡在 ~45%。**评估口径从此固定为 30 seed**（分布内 500–529，分布外 600–629）。**防污染约定**：分布内/外评测 seed（500–529 / 600–629）以及任何历史补采 seed（601–609、610–619、700–709）一律不得进入后续训练或补采数据。
 
 **A：补采数据覆盖检查**（逐样本统计 `runs/dagger/*.npz`）：
 
@@ -214,61 +214,20 @@ git lfs pull                       # 若新增了 LFS 产物
 
 # ── 1. 第三轮补采（需 Mac 已实现 §8.4 前置改动）──────────────────
 # 用当前 grasp-30k 诱导失败态，采集"已贴近但水平偏差"的修正监督
+#
+# ⚠️ seed 防污染约定：
+#   - 分布内评测 500–529、分布外评测 600–629 不得进入补采；
+#   - 第二轮补采已用 601–609、610–619、700–709，第三轮不得重复；
+#   - 因此第三轮补采用 630–649, 720–739（与评测、历史补采全不重叠）。
 PYTHONPATH=src python src/visual_dagger_collect.py \
   --policy-dir runs/maniskill_act/week17-pick-grasp-30k \
   --output runs/dagger/week17-visual-dagger-pick-align3.npz \
-  --seeds 610-619,700-719 \          # 新 OOD seed，避开已诊断集（注意 CLI 用逗号）
+  --seeds 630-649,720-739 \          # 与评测集(500-529/600-629)及历史补采(601-619/700-709)均不重叠
   --takeover grasp \
   --resolution 128 \
   --device cuda \
   --min-segment 3
 # 若加了 --align-zone-min/--align-zone-max，在此传参
-
-# 检查补采质量：应看到 tcp-obj 水平分布在 0.01~0.05、obj-goal 多变
-python -c "
-import numpy as np
-d = np.load('runs/dagger/week17-visual-dagger-pick-align3.npz')
-env = d['env_state']
-tcp_obj_xy = np.linalg.norm(env[:,6:8], axis=1)
-print('N=', len(env), '水平 p10/中位/p90=', np.percentile(tcp_obj_xy,[10,50,90]).round(3))
-"
-
-# ── 2. 重训（30k，合并原始 train + 第三轮补采）────────────────────
-# 关键：补采 episode 插入 train 之后，train_episodes 必须 = 80 + 补采数 N
-# （参考第二轮：20 个补采 episode → --train-episodes-per-task 100）
-PYTHONPATH=src python src/run_visual_act.py \
-  --dataset-dir runs/maniskill_lerobot/week15-cam \
-  --repo-id bot-agent/maniskill-week11 \
-  --task PickCube-v1 \
-  --resolution 128 --batch-size 8 \
-  --training-steps 30000 \
-  --dagger-data runs/dagger/week17-visual-dagger-pick-align3-clean.npz \
-  --train-episodes-per-task <80+N> \
-  --device cuda \
-  --output-dir runs/maniskill_act/week17-pick-align3-30k
-# 注：若采集未成功（N=0 或全被过滤），不要重训，先调采集条件
-
-# ── 3. 4060 本地先 smoke 复评（可选，确认不挂死）─────────────────
-PYTHONPATH=src python src/run_generalization.py \
-  --checkpoint-dir runs/maniskill_act/week17-pick-align3-30k \
-  --output-dir runs/maniskill_act/week17-align3-smoke \
-  --in-seeds 500-502 --ood-seeds 600-602 \
-  --perturbation background,lighting,pose --task PickCube-v1 \
-  --smoothing-values 1.0 --device cuda
-
-# ── 4. 正式 30 seed 评测 ─────────────────────────────────────────
-PYTHONPATH=src python src/run_generalization.py \
-  --checkpoint-dir runs/maniskill_act/week17-pick-align3-30k \
-  --output-dir runs/maniskill_act/week17-align3-eval30 \
-  --in-seeds 500-529 --ood-seeds 600-629 \
-  --perturbation background,lighting,pose --task PickCube-v1 \
-  --smoothing-values 1.0 --device cuda
-
-# ── 5. 产物回传 Mac（git LFS）────────────────────────────────────
-git add runs/maniskill_act/week17-pick-align3-30k runs/dagger/*align3*
-git commit -m "feat(week17): 第三轮水平对准补采与 30k 重训产物"
-git push
-# Mac 端：git pull && git lfs pull 后复评/复诊
 ```
 
 **4060 验收判据**（第三轮达标）：
