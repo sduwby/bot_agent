@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import io
 import json
 import os
 from typing import Any, Protocol
@@ -10,10 +12,65 @@ from skill_registry import get_skills_description
 from task_parser import parse_instruction
 
 
-class LLMBackend(Protocol):
-    """LLM 后端统一接口。"""
+def _to_pil_rgb(image: Any, *, max_size: int) -> Any:
+    """归一化为 PIL RGB 图像，并按最长边降采样到 max_size（data URL 除外）。"""
+    from PIL import Image
 
-    def chat(self, system: str, user: str) -> str: ...
+    if isinstance(image, str):
+        raise TypeError("不支持的文件路径/文本输入，请传 ndarray/PIL.Image/bytes")
+    if isinstance(image, bytes):
+        img = Image.open(io.BytesIO(image))
+    elif hasattr(image, "mode") and hasattr(image, "resize"):  # PIL.Image
+        img = image
+    else:  # 假定 ndarray HWC uint8
+        import numpy as np
+
+        arr = image
+        if arr.dtype != np.uint8:
+            arr = arr.astype(np.uint8)
+        if arr.ndim == 3 and arr.shape[2] == 3:
+            img = Image.fromarray(arr, "RGB")
+        else:
+            raise TypeError(f"不支持的图像输入 shape={getattr(image, 'shape', '?')}")
+    img = img.convert("RGB")
+    if max(img.size) > max_size:
+        ratio = max_size / float(max(img.size))
+        img = img.resize((max(1, int(img.width * ratio)), max(1, int(img.height * ratio))))
+    return img
+
+
+def image_to_data_url(image: Any, *, max_size: int = 640, quality: int = 85) -> str:  # noqa: F811
+    """把 ndarray(HWC uint8 RGB) / PIL.Image / bytes / data URL 转成 data URL。"""
+    if isinstance(image, str) and image.startswith("data:image/"):
+        return image
+    img = _to_pil_rgb(image, max_size=max_size)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=quality)
+    encoded = base64.b64encode(buf.getvalue()).decode("ascii")
+    return f"data:image/jpeg;base64,{encoded}"
+
+
+def build_multimodal_content(user: str, images: list[str] | None = None) -> Any:
+    """构造 user 消息 content。
+
+    无图：返回纯文本字符串（兼容 json_object 模式）。
+    有图：返回 [{type:text},{type:image_url,image_url:{url}},...]。
+    """
+    if not images:
+        return user
+    content: list[dict[str, Any]] = [{"type": "text", "text": user}]
+    for url in images:
+        content.append({"type": "image_url", "image_url": {"url": url}})
+    return content
+
+
+class LLMBackend(Protocol):
+    """LLM 后端统一接口。
+
+    images: 可选图像 data URL 列表（视觉模型多模态输入）。
+    """
+
+    def chat(self, system: str, user: str, images: list[str] | None = None) -> str: ...
 
 
 _SYSTEM_PROMPT_TEMPLATE = """\
@@ -130,16 +187,20 @@ class OpenAIBackend:
             max_retries=self.max_retries,
         )
 
-    def chat(self, system: str, user: str) -> str:
+    def chat(self, system: str, user: str, images: list[str] | None = None) -> str:
         self._ensure_client()
+        user_content = build_multimodal_content(user, images)
+        kwargs: dict[str, Any] = {"temperature": 0}
+        if not images:
+            # 视觉模型普遍不兼容 json_object；有图时改靠 system prompt 约束 + parse_decision 容错
+            kwargs["response_format"] = {"type": "json_object"}
         resp = self._client.chat.completions.create(
             model=self.model,
             messages=[
                 {"role": "system", "content": system},
-                {"role": "user", "content": user},
+                {"role": "user", "content": user_content},
             ],
-            response_format={"type": "json_object"},
-            temperature=0,
+            **kwargs,
         )
         content = resp.choices[0].message.content or ""
         return content.strip()
@@ -153,7 +214,7 @@ class RuleFallback:
     def __init__(self) -> None:
         self._step = 0
 
-    def chat(self, system: str, user: str) -> str:
+    def chat(self, system: str, user: str, images: list[str] | None = None) -> str:
         instruction = self._extract_instruction(user)
         spec = parse_instruction(instruction)
         if f"place{{'receptacle_type': '{spec.receptacle_type}'}} → 成功" in user:

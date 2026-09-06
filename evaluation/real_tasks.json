@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "name": "SO-101 真机单技能任务集（阶段 F）",
+  "tasks": [
+    {"id": "r01", "name": "夹起螺丝刀_左", "position": "左", "instruction": "夹起桌面上的螺丝刀", "tags": ["grasp", "position_left"]},
+    {"id": "r02", "name": "夹起螺丝刀_中", "position": "中", "instruction": "夹起桌面上的螺丝刀", "tags": ["grasp", "position_center"]},
+    {"id": "r03", "name": "夹起螺丝刀_右", "position": "右", "instruction": "夹起桌面上的螺丝刀", "tags": ["grasp", "position_right"]},
+    {"id": "r04", "name": "夹起螺丝刀_近", "position": "近", "instruction": "夹起桌面上的螺丝刀", "tags": ["grasp", "position_near"]},
+    {"id": "r05", "name": "夹起螺丝刀_远", "position": "远", "instruction": "夹起桌面上的螺丝刀", "tags": ["grasp", "position_far"]}
+  ]
+}
