@@ -24,6 +24,8 @@ runs/*
 outputs/
 trajectories/
 *.mp4
+# 真机演示视频例外
+!demo/*.mp4
 
 # 训练数据集与训练产物通过 git 同步到 4060，其余 runs 产物仍忽略
 !runs/maniskill_lerobot/

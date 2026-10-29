@@ -16,6 +16,7 @@
 │   ├── run_*.py          # 各实验与工具的 CLI 入口
 │   └── tests/            # pytest 测试
 ├── docs/week<N>/         # 每周设计文档与实施计划
+├── demo/                 # 真机实际运行演示视频（success/failed）
 ├── runs/                 # 运行产物（截图、轨迹、摘要，默认忽略不提交）
 ├── .env.example          # 环境变量模板
 └── requirements*.txt     # 分场景依赖清单
