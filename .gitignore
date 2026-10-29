@@ -48,6 +48,14 @@ runs/maniskill_act/*
 !runs/maniskill_act/week17-res224-eval30/
 !runs/maniskill_act/week17-align3-eval10chk/
 !runs/dagger/
+!runs/week38/
+runs/week38/*
+!runs/week38/_upload/
+runs/week38/_upload/*
+!runs/week38/_upload/wangbangyan/
+!runs/week38/collect/
+!runs/week38/ablation_data/
+!runs/week38/**/*.mp4
 src/runs/
 
 # AI2-THOR / Unity 本地下载与构建缓存

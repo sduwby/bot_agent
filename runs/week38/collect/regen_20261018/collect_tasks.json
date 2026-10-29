@@ -1,0 +1,69 @@
+{
+  "schema_version": "week38_vla_collect_plan_v1",
+  "instructions": [
+    {
+      "key": "pick_a",
+      "template": "夹起桌面上的{object}"
+    },
+    {
+      "key": "place_left",
+      "template": "把{object}放到左边"
+    }
+  ],
+  "paraphrase_available": false,
+  "sidecar_dir": "runs\\week38\\collect\\sidecars",
+  "lerobot_cache_root": "C:\\Users\\Administrator\\.cache\\huggingface\\lerobot",
+  "push_to_hub": false,
+  "python": "D:\\miniconda\\envs\\lerobot\\python.exe",
+  "disable_torque_on_disconnect": false,
+  "tasks": [
+    {
+      "index": 1,
+      "object": "螺丝刀",
+      "instruction_key": "pick_a",
+      "instruction": "夹起桌面上的螺丝刀",
+      "repo_id": "wangbangyan/demo_vla_01_pick_a",
+      "episodes": 20
+    },
+    {
+      "index": 2,
+      "object": "螺丝刀",
+      "instruction_key": "place_left",
+      "instruction": "把螺丝刀放到左边",
+      "repo_id": "wangbangyan/demo_vla_01_place_left",
+      "episodes": 20
+    },
+    {
+      "index": 3,
+      "object": "黑色长条",
+      "instruction_key": "pick_a",
+      "instruction": "夹起桌面上的黑色长条",
+      "repo_id": "wangbangyan/demo_vla_02_pick_a",
+      "episodes": 20
+    },
+    {
+      "index": 4,
+      "object": "黑色长条",
+      "instruction_key": "place_left",
+      "instruction": "把黑色长条放到左边",
+      "repo_id": "wangbangyan/demo_vla_02_place_left",
+      "episodes": 20
+    },
+    {
+      "index": 5,
+      "object": "指甲刀",
+      "instruction_key": "pick_a",
+      "instruction": "夹起桌面上的指甲刀",
+      "repo_id": "wangbangyan/demo_vla_03_pick_a",
+      "episodes": 20
+    },
+    {
+      "index": 6,
+      "object": "指甲刀",
+      "instruction_key": "place_left",
+      "instruction": "把指甲刀放到左边",
+      "repo_id": "wangbangyan/demo_vla_03_place_left",
+      "episodes": 20
+    }
+  ]
+}
