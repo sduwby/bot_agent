@@ -5,12 +5,17 @@ from __future__ import annotations
 import json
 import os
 import sys
+from pathlib import Path
+
+import numpy as np
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from llm_planner import LLMBackend
 from real_agent import RealRobotAgent
 from real_executor import MockEngine, RealSkillExecutor
+from real_skills import FAIL_GRASP_EMPTY, FAIL_HOME_TIMEOUT, FAIL_NOT_HOLDING
 
 
 class ScriptedBackend(LLMBackend):
@@ -113,6 +118,148 @@ class TestSkillExecutorMock:
         executor = RealSkillExecutor(engine, empty_grip_baseline=1.5)
         assert executor.execute("verify_holding").success
         assert executor.execute("release").success
+
+
+class TestExecutorLoadSignal:
+    """0.6 之后执行器把负载读数接进夹持判定。"""
+
+    def test_mock_load_follows_grasp_result(self) -> None:
+        """Mock 的负载必须与抓取结果同口径，否则「位置 OR 负载」会把咬空判成夹持。"""
+        assert MockEngine(grasp_result="grasp_empty").read_load()["gripper.load"] == pytest.approx(-62.0)
+        assert MockEngine(grasp_result="success").read_load()["gripper.load"] == pytest.approx(-206.0)
+
+    def test_mock_load_override_is_honored(self) -> None:
+        assert MockEngine(grasp_result="success", gripper_load=55.0).read_load()["gripper.load"] == 55.0
+
+    def test_load_rescues_ultra_thin_grasp(self) -> None:
+        """位置只到 4.2（低于阈值 5.5），负载 −206‰ → 仍判夹住。"""
+        engine = MockEngine(grasp_result="success")
+        engine.state["gripper.pos"] = 4.2
+        executor = RealSkillExecutor(engine)
+        assert executor.execute("grasp_screwdriver").success
+
+    def test_empty_position_with_empty_load_is_grasp_empty(self) -> None:
+        engine = MockEngine(grasp_result="grasp_empty")
+        executor = RealSkillExecutor(engine)
+        r = executor.execute("grasp_screwdriver")
+        assert not r.success and r.failure_reason == FAIL_GRASP_EMPTY
+
+    def test_engine_without_load_degrades_to_position(self) -> None:
+        """引擎不实现 read_load 时，不能因为读不到负载就判成夹住。"""
+
+        class NoLoadEngine(MockEngine):
+            def read_load(self):
+                raise AttributeError("此引擎不支持负载读取")
+
+        engine = NoLoadEngine(grasp_result="success")
+        engine.state["gripper.pos"] = 3.9  # 空载量级位置
+        executor = RealSkillExecutor(engine)
+        assert executor.execute("verify_holding").failure_reason == FAIL_NOT_HOLDING
+
+
+class TestGraspPipelineGuards:
+    """grasp 技能的两条前置保障：先归位、超时预算按步数缩放。"""
+
+    def test_timeout_scales_with_steps(self) -> None:
+        """默认 300+300 步 × 0.5 s/步 = 300 s（旧实现写死 120 s 必然超时）。"""
+        assert RealSkillExecutor(MockEngine()).grasp_timeout() == pytest.approx(300.0)
+
+    def test_timeout_keeps_floor_for_small_runs(self) -> None:
+        assert RealSkillExecutor(MockEngine(), max_grasp_steps=50,
+                                 hold_steps=50).grasp_timeout() == pytest.approx(120.0)
+
+    def test_explicit_timeout_wins(self) -> None:
+        ex = RealSkillExecutor(MockEngine(), grasp_timeout_s=42.0)
+        assert ex.grasp_timeout() == pytest.approx(42.0)
+
+    def test_home_failure_aborts_before_policy(self) -> None:
+        """归位失败必须直接失败，且**不进入策略段**——否则会从错误起跑位姿空跑 600 步。"""
+        engine = MockEngine(grasp_result="success")
+        engine.home = lambda timeout_s=None, **_: False
+        result = RealSkillExecutor(engine).execute("grasp_screwdriver")
+        assert not result.success and result.failure_reason == FAIL_HOME_TIMEOUT
+        assert engine.grasp_calls == 0
+
+    def test_home_runs_before_policy(self) -> None:
+        calls: list[str] = []
+        engine = MockEngine(grasp_result="success")
+        engine.home = lambda timeout_s=None, **_: (calls.append("home"), True)[1]
+        original = engine.grasp_and_lift
+        engine.grasp_and_lift = lambda s, h: (calls.append("grasp"), original(s, h))[1]
+        assert RealSkillExecutor(engine).execute("grasp_screwdriver").success
+        assert calls == ["home", "grasp"]
+
+
+class TestPark:
+    """收尾复位：运行结束后把机械臂送回采集初始姿态。"""
+
+    def test_park_homes_the_arm(self) -> None:
+        calls: list[str] = []
+        engine = MockEngine()
+        engine.home = lambda timeout_s=None, **_: (calls.append("home"), True)[1]
+        assert RealSkillExecutor(engine).park() is True
+        assert calls == ["home"]
+
+    def test_park_reports_failure_without_raising(self) -> None:
+        """复位失败（如超时）只返回 False —— 收尾动作不该盖过主流程结论。"""
+        engine = MockEngine()
+        engine.home = lambda timeout_s=None, **_: False
+        assert RealSkillExecutor(engine).park() is False
+
+    def test_park_swallows_engine_errors(self) -> None:
+        engine = MockEngine()
+
+        def boom(timeout_s=None, **_):
+            raise RuntimeError("串口断开")
+
+        engine.home = boom
+        assert RealSkillExecutor(engine).park() is False
+
+    def test_park_can_skip_gripper(self) -> None:
+        """归位可以只复位臂关节：`include_gripper=False` 必须透传到引擎。"""
+        seen: list[bool] = []
+
+        def fake_home(timeout_s=None, *, include_gripper=True):
+            seen.append(include_gripper)
+            return True
+
+        engine = MockEngine()
+        engine.home = fake_home
+        assert RealSkillExecutor(engine).park(include_gripper=False) is True
+        assert seen == [False]
+
+
+class TestHomeSkipGripper:
+    """归位跳过夹爪：既不下发目标，也不参与到达判定。"""
+
+    def test_skip_gripper_sends_only_arm_joints(self, monkeypatch) -> None:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "outputs"))
+        import infer_so101
+
+        sent: list[dict[str, float]] = []
+
+        class _Robot:
+            def send_action(self, action):
+                sent.append(dict(action))
+
+        class _DS:
+            pass
+
+        state = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 20.0], dtype=np.float32)  # 夹爪不在初始位
+        monkeypatch.setattr(
+            infer_so101, "build_observation_from_robot",
+            lambda robot, ds: {"observation.state": state.copy()},
+        )
+        monkeypatch.setattr(infer_so101, "busy_wait", lambda dt: None)
+
+        initial = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.56], dtype=np.float32)
+        ok = infer_so101.home_to_initial(
+            _Robot(), _DS(), initial, timeout_s=0.5, skip_joints=("gripper.pos",)
+        )
+
+        assert ok is True  # 夹爪不参与判定，故 5 个臂关节到位即可
+        assert sent and "gripper.pos" not in sent[0]
+        assert set(sent[0]) == set(infer_so101.STATE_NAMES) - {"gripper.pos"}
 
 
 class TestAgentVision:

@@ -23,6 +23,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 from real_evaluation import EvalTrial, RealEvalRunner, load_real_task_set
 from real_executor import MockEngine, RealEngine, RealSkillExecutor
+from real_observation import EMPTY_GRIP_BASELINE
 from real_router import RealSkillRouter, default_real_route
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -49,6 +50,8 @@ def main() -> None:
         verdict = "abort"
         note = ""
         steps_run = 0
+        engine = None
+        executor = None
         try:
             if args.dry_run:
                 engine = MockEngine(grasp_result="success")
@@ -57,7 +60,7 @@ def main() -> None:
                     model_dir=args.model_dir, dataset_root=args.dataset_root,
                     dataset_repo=args.dataset_repo, max_relative_target=args.max_relative_target,
                 )
-            executor = RealSkillExecutor(engine, empty_grip_baseline=1.5,
+            executor = RealSkillExecutor(engine, empty_grip_baseline=EMPTY_GRIP_BASELINE,
                                          max_grasp_steps=args.steps, hold_steps=args.hold_steps)
             router = RealSkillRouter(executor, default_real_route())
             result = router.run_skill("grasp_screwdriver")
@@ -67,11 +70,16 @@ def main() -> None:
             else:
                 verdict = "abort" if result.exhausted else "grasp_empty"
                 note = result.error or result.outcome_message
-            if not args.dry_run:
-                engine.close()
         except Exception as exc:
             note = f"异常: {exc}"
             logging.error("任务 %s 异常: %s", task["id"], exc)
+        finally:
+            # 收尾复位：每轮结束都回到采集初始姿态，避免任务间位姿漂移累积
+            if executor is not None:
+                logging.info("[%s] 收尾复位: %s", task["id"],
+                             "成功" if executor.park() else "失败")
+            if engine is not None:
+                engine.close()
 
         trial = EvalTrial(task_id=task["id"], instruction=task.get("instruction", ""),
                           position=task.get("position", ""), verdict=verdict,

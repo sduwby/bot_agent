@@ -17,15 +17,24 @@ EXAMPLE_TASKS = [
     "把螺丝刀放到桌面左侧",   # 需要 place/zone 技能数据，框架先行阶段可选
 ]
 
+# 采集命令模板。**必须走 `run_vla_collect_record.py` 而不是裸 `lerobot-record`**：
+# 后者采出来的数据集只有六轴 `.pos` + 相机、**不含 `Present_Load`**，而 2.10 的取证表明
+# "没有负载通道就做不了可靠的成功标注"（位置判据对人工真值零可分性、错误率 57%）。
+# 该包装脚本不改数据集 fields，只在录制时**旁挂**写一份 load_sidecar.jsonl。
 RECORD_TEMPLATE = """\
-D:\\miniconda\\envs\\lerobot\\Scripts\\lerobot-record.exe `
+D:\\miniconda\\envs\\lerobot\\python.exe src\\run_vla_collect_record.py `
+  --sidecar runs\\week38\\collect\\load_sidecar.jsonl `
   --robot.type=so101_follower --robot.port=COM6 --robot.id=my_awesome_follower_arm `
-  --robot.cameras='{{"fixed": {{"type": "opencv", "index_or_path": 2, "width": 640, "height": 480, "fps": 30}}, "handeye": {{"type": "opencv", "index_or_path": 1, "width": 640, "height": 480, "fps": 30}}}}' `
+  --robot.cameras='{{"fixed": {{"type": "opencv", "index_or_path": 2, "width": 640, "height": 480, "fps": 30}}, "handeye": {{"type": "opencv", "index_or_path": 0, "width": 640, "height": 480, "fps": 30}}}}' `
   --teleop.type=so101_leader --teleop.port=COM5 --teleop.id=my_awesome_leader_arm `
   --dataset.repo_id={repo} `
   --dataset.single_task="{task}" `
   --dataset.num_episodes={num_eps} --dataset.episode_time_s=99999 --dataset.reset_time_s=99999 `
   --dataset.push_to_hub=true --dataset.private=true --display_data=false
+
+:: 采完**必须**校验旁挂与数据集逐帧对齐（不通过则该份旁挂数据不可用）
+D:\\miniconda\\envs\\lerobot\\python.exe src\\run_vla_collect_record.py --verify `
+  --dataset-root <该 repo 的数据集根目录> --sidecar runs\\week38\\collect\\load_sidecar.jsonl
 """
 
 
@@ -55,6 +64,9 @@ def main() -> None:
         "- 每任务每条文本 ≥20 条 demo；螺丝刀位置随机覆盖桌面左/中/右/近/远",
         "- 每集至少录 1 秒再按 →/Enter 结束；坏集用 ← 重录；保存期间不按键",
         "- VLA 数据强调**文本与行为的对应**：同一动作尽量配多条同义文本",
+        "- **必须用下面的模板录制（含 `--sidecar` 旁挂负载）**：不加负载通道的数据集"
+        "无法做可靠的成功标注（2.10 取证：位置判据对人工真值零可分性、错误率 57%）",
+        "- **采完必须跑一次 `--verify`**：校验旁挂与数据集逐帧对齐，不通过则该份旁挂数据不可用",
         "",
         "## 录制命令模板（逐任务执行）",
         "",

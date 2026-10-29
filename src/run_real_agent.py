@@ -33,6 +33,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from env_config import load_local_env
+from real_observation import EMPTY_GRIP_BASELINE
 
 load_local_env(".env")  # 把仓库根目录 .env 写入进程环境（不覆盖已有 shell 配置）
 
@@ -91,7 +92,7 @@ def build_skill_agent(args, dry_run: bool):
 
     if dry_run:
         engine = MockEngine(grasp_result=args.mock_result, with_images=args.mock_images)
-        empty_baseline = 1.5
+        empty_baseline = EMPTY_GRIP_BASELINE
     else:
         engine = RealEngine(
             model_dir=args.model_dir,
@@ -128,7 +129,8 @@ def main() -> None:
     parser.add_argument("--port", default="COM6")
     parser.add_argument("--steps", type=int, default=300, help="grasp 技能策略段步数")
     parser.add_argument("--hold-steps", type=int, default=300, help="grasp 保持段步数")
-    parser.add_argument("--empty-grip-baseline", type=float, default=1.5)
+    parser.add_argument("--empty-grip-baseline", type=float, default=EMPTY_GRIP_BASELINE,
+                        help="空闭基准（默认取 0.6 真机标定值）")
     parser.add_argument("--max-plan-steps", type=int, default=6)
     parser.add_argument("--mock-result", choices=["success", "grasp_empty", "not_lifted"],
                         default="success", help="dry-run 时 Mock 引擎的抓取结果")
@@ -137,6 +139,8 @@ def main() -> None:
                              "fake=确定性假后端（dry-run 演示用）")
     parser.add_argument("--no-vision", action="store_true",
                         help="关闭图像输入，仅用文本观测决策（省 token/费用）")
+    parser.add_argument("--no-park", action="store_true",
+                        help="收尾不复位（默认会把机械臂送回采集初始姿态）")
     parser.add_argument("--mock-images", action="store_true",
                         help="dry-run 时让 Mock 引擎返回合成相机帧，验证视觉链路")
     args = parser.parse_args()
@@ -151,6 +155,11 @@ def main() -> None:
     try:
         outcome = agent.run(args.instruction)
     finally:
+        # 收尾复位：把机械臂送回采集初始姿态，避免留在策略结束时的任意位姿
+        # （断开后靠减速比自锁，所以这一步决定了下一次运行看到的手臂位姿）
+        if not args.no_park:
+            parked = executor.park()
+            print(f"\n[收尾] 复位到采集初始姿态: {'成功' if parked else '失败'}")
         executor.engine.close()
 
     print("\n==== 执行记录 ====")

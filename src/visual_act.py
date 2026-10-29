@@ -123,6 +123,23 @@ class VisualACTTrainingConfig:
     train_episodes_per_task: int = 80
     validation_episodes_per_task: int = 20
     dagger_data: Path | None = None
+    #: 第 38 周 P0/B0–B3 的**额外观测通道**：`real_geometry.variant_feature_names(variant)`
+    #: 给出的特征名列表（`()` = B0，即与历史行为完全一致）。
+    #: 这些列**追加在 ENV 辅助向量的尾部**（13 → 13+n），因此不改动 LeRobot 的
+    #: FeatureType/归一化映射、也不新增 feature key —— 老 checkpoint 与老数据集不受影响。
+    #: 语义与既有 ENV 通道一致：**不做归一化**，上游需自行标准化。
+    extra_features: tuple[str, ...] = ()
+    #: **ENV 通道口径**（第 38 周 P0 消融，2026-10-11 决策）：
+    #:
+    #: - ``"full"``：13 维特权 env_state + 额外列（历史行为 = 旧 B0）；
+    #: - ``"extra_only"``：**只保留额外列**（``extra_features=()`` 时等于彻底不用 ENV 通道）。
+    #:
+    #: 这是让 B0–B3 消融**有信息量**的口径：`env_state` 本身已含
+    #: `obj_pos / (tcp−obj) / is_grasped`，而 B1/B2 的列正是它们的确定性函数 ——
+    #: B0 也带着这些特权量时，"补列"不可能带来增益（ΔGrasp 只可能是噪声）。
+    #: 改成 B0 不带 ENV 后，B1–B3 才是在**真的补信息**。
+    #: 该开关只改**策略侧用多少列**；数据集仍然存 13+n（见 `dataset_env_state_dim`）。
+    env_state_mode: str = "full"
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -167,6 +184,31 @@ class VisualACTTrainingConfig:
                 raise ValueError(f"任务重复：{env_id}")
             checked.append(env_id)
         object.__setattr__(self, "tasks", tuple(checked))
+        checked_extra: list[str] = []
+        for name in self.extra_features:
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError("extra_features 的元素必须是非空字符串")
+            if name in checked_extra:
+                raise ValueError(f"extra_features 重复：{name}")
+            checked_extra.append(name)
+        object.__setattr__(self, "extra_features", tuple(checked_extra))
+        if self.env_state_mode not in ("full", "extra_only"):
+            raise ValueError(
+                "env_state_mode 必须是 'full' 或 'extra_only'，"
+                f"实际 {self.env_state_mode!r}"
+            )
+
+    @property
+    def dataset_env_state_dim(self) -> int:
+        """数据集里 `observation.environment_state` 应有的列数（13 + 额外列）。"""
+        return ENV_STATE_DIM + len(self.extra_features)
+
+    @property
+    def env_state_dim(self) -> int:
+        """**策略侧** ENV 向量维度；``extra_only`` 模式下可为 0（表示不用 ENV 通道）。"""
+        if self.env_state_mode == "extra_only":
+            return len(self.extra_features)
+        return self.dataset_env_state_dim
 
 
 @dataclass(frozen=True)
@@ -365,8 +407,11 @@ def load_visual_dataset(
             item[OBS_STATE_KEY], (ROBOT_STATE_DIM,), "observation.state"
         )
         env_state = _finite_array(
-            item[OBS_ENV_STATE_KEY], (ENV_STATE_DIM,), "environment_state"
+            item[OBS_ENV_STATE_KEY],
+            (config.dataset_env_state_dim,),
+            f"environment_state（B 变体额外 {len(config.extra_features)} 列）",
         )
+        env_state = _select_env_state(env_state, config)
         action = _finite_array(item[ACTION_KEY], (ACTION_DIM,), "action")
         bucket = grouped[env_id].setdefault(
             episode_index,
@@ -522,17 +567,21 @@ def compute_visual_act_stats(
     image_std = images.std(axis=(0, 2, 3))
     image_std = np.where(image_std < 1e-6, 1.0, image_std).astype(np.float32)
     state_mean, state_std = _normalization_stats(robot_states)
-    env_mean, env_std = _normalization_stats(env_states)
     action_mean, action_std = _normalization_stats(data.actions[index_array])
-    return {
+    stats: dict[str, dict[str, object]] = {
         OBS_IMAGE_KEY: {
             "mean": image_mean.reshape(-1, 1, 1),
             "std": image_std.reshape(-1, 1, 1),
         },
         OBS_STATE_KEY: {"mean": state_mean, "std": state_std},
-        OBS_ENV_STATE_KEY: {"mean": env_mean, "std": env_std},
         ACTION_KEY: {"mean": action_mean, "std": action_std},
     }
+    # 0 维 = 该变体不用 ENV 通道（B0 新口径）：统计项**一并省掉**，
+    # 否则会给归一化器塞一个 0 维张量
+    if env_states.shape[-1] > 0:
+        env_mean, env_std = _normalization_stats(env_states)
+        stats[OBS_ENV_STATE_KEY] = {"mean": env_mean, "std": env_std}
+    return stats
 
 
 def _stats_to_tensors(
@@ -551,7 +600,7 @@ def _stats_to_tensors(
 def make_visual_act_config(
     config: VisualACTTrainingConfig,
 ) -> object:
-    """创建 VISUAL+STATE+ENV 的 ACTConfig。"""
+    """创建 ACTConfig：VISUAL + STATE，ENV 视 `env_state_mode` 决定是否注册。"""
     try:
         from lerobot.configs.types import FeatureType, PolicyFeature
         from lerobot.policies.act.configuration_act import ACTConfig
@@ -562,8 +611,13 @@ def make_visual_act_config(
             FeatureType.VISUAL, (3, config.resolution, config.resolution)
         ),
         OBS_STATE_KEY: PolicyFeature(FeatureType.STATE, (ROBOT_STATE_DIM,)),
-        OBS_ENV_STATE_KEY: PolicyFeature(FeatureType.ENV, (ENV_STATE_DIM,)),
     }
+    # ENV 维度为 0（B0 新口径：不带特权几何）时**整块省掉**该 feature ——
+    # 注册一个 0 维特征会让 ACT 的输入投影退化成无意义的噪声源。
+    if config.env_state_dim > 0:
+        input_features[OBS_ENV_STATE_KEY] = PolicyFeature(
+            FeatureType.ENV, (config.env_state_dim,)
+        )
     output_features = {
         ACTION_KEY: PolicyFeature(FeatureType.ACTION, (ACTION_DIM,))
     }
@@ -619,13 +673,15 @@ def _visual_batch_from_indices(
 ) -> dict[str, object]:
     torch = _torch_module()
     indices = np.asarray(list(indices), dtype=np.int64)
-    return {
+    batch: dict[str, object] = {
         OBS_IMAGE_KEY: torch.from_numpy(dataset.images[indices]),
         OBS_STATE_KEY: torch.from_numpy(dataset.robot_state[indices]),
-        OBS_ENV_STATE_KEY: torch.from_numpy(dataset.env_state[indices]),
         ACTION_KEY: torch.from_numpy(dataset.action_chunk[indices]),
         ACTION_IS_PAD_KEY: torch.from_numpy(dataset.action_is_pad[indices]),
     }
+    if dataset.env_state.shape[-1] > 0:  # 0 维 = 该变体不用 ENV 通道（B0 新口径）
+        batch[OBS_ENV_STATE_KEY] = torch.from_numpy(dataset.env_state[indices])
+    return batch
 
 
 def _evaluate_validation_loss(
@@ -872,6 +928,8 @@ def _train_one_task(
             }
             for key, value in dataset_stats.items()
         },
+        "extra_features": list(config.extra_features),
+        "env_state_mode": config.env_state_mode,
         "versions": _environment_versions(),
     }
     _atomic_write_json(task_dir / "task_metadata.json", metadata)
@@ -1003,6 +1061,48 @@ def _to_float32_numpy(value: object) -> np.ndarray:
     return np.asarray(candidate, dtype=np.float32).reshape(-1)
 
 
+def _select_env_state(
+    env_state: np.ndarray, config: VisualACTTrainingConfig
+) -> np.ndarray:
+    """按 `env_state_mode` 从数据集列里挑出**策略侧**要用的部分。
+
+    ``extra_only`` 时只取**尾部 n 列**（额外列在数据集里就是追加在 13 维之后的）——
+    这样同一个数据集既能喂 ``full`` 也能喂 ``extra_only``，不必重做数据。
+    n=0 时返回空向量，后续装配会**整块省掉 ENV 通道**。
+    """
+    array = np.asarray(env_state, dtype=np.float32)
+    if config.env_state_mode != "extra_only":
+        return array
+    count = len(config.extra_features)
+    if count == 0:
+        return np.zeros((0,), dtype=np.float32)
+    if array.shape[-1] < count:
+        raise VisualACTError(
+            f"env_state 末维 {array.shape[-1]} 小于额外列数 {count}，无法切出额外列"
+        )
+    return array[..., -count:]
+
+
+def _append_extra_features(
+    env_state: np.ndarray,
+    extras: np.ndarray,
+    expected: int,
+    env_id: str,
+) -> np.ndarray:
+    """把 B 变体的额外观测通道**追加**到 ENV 辅助向量尾部（13 → 13+n）。
+
+    抽成纯函数是为了让"列序与维度"能被离线测试——它一旦错位，训练与推理仍会
+    产出"有限"的数值，指标只是变差，事后几乎无法归因。
+    """
+    if extras.shape != (expected,):
+        raise VisualACTError(
+            f"{env_id} 额外观测通道维度不符：{extras.shape} 期望 ({expected},)"
+        )
+    if not np.all(np.isfinite(extras)):
+        raise VisualACTError(f"{env_id} 额外观测通道含非有限数")
+    return np.concatenate((np.asarray(env_state, dtype=np.float32), extras))
+
+
 class VisualACTPolicy:
     """从磁盘 checkpoint 构造的单任务视觉 ACT rollout wrapper。"""
 
@@ -1017,6 +1117,9 @@ class VisualACTPolicy:
         postprocessor: object,
         resolution: int,
         action_smoothing: float = 1.0,
+        extra_features: Sequence[str] = (),
+        extra_provider: Callable[[Mapping[str, object]], Sequence[float]] | None = None,
+        env_state_mode: str = "full",
     ) -> None:
         self.env_id = env_id
         self._policy = policy
@@ -1024,6 +1127,21 @@ class VisualACTPolicy:
         self._post = postprocessor
         self._resolution = resolution
         self._smoothing = _validate_smoothing(action_smoothing)
+        #: 额外观测通道（B1–B3）。**必须由调用方提供与训练同序的特征**：
+        #: 缺特征时宁可报错，也不能补 0 —— 补 0 会让"特征没测到"变成"特征等于 0"，
+        #: 消融结论会因此失真且无法事后区分。
+        self._extra_features = tuple(str(name) for name in extra_features)
+        self._extra_provider = extra_provider
+        self._env_state_mode = str(env_state_mode)
+        if self._env_state_mode not in ("full", "extra_only"):
+            raise VisualACTError(
+                f"env_state_mode 必须是 'full' 或 'extra_only'，实际 {self._env_state_mode!r}"
+            )
+        if self._extra_features and extra_provider is None:
+            raise VisualACTError(
+                f"{env_id} checkpoint 带额外观测通道 {self._extra_features}，"
+                "但未提供 extra_provider：推理时无法构造与训练同序的特征"
+            )
         self._smoothed: np.ndarray | None = None
         config_obj = getattr(policy, "config", None)
         n_action_steps = (
@@ -1071,13 +1189,26 @@ class VisualACTPolicy:
         torch = _torch_module()
         state = observation_to_state(observation)
         robot, env_state = split_lerobot_act_state(state)
+        if self._extra_features:
+            extras = np.asarray(
+                self._extra_provider(observation), dtype=np.float32
+            ).reshape(-1)
+            # `extra_only` 时**只喂派生列**：必须与训练侧 `_select_env_state` 同口径，
+            # 否则策略收到 13+n 维而权重只认 n 维 —— 形状不报错、结果全错，最难查
+            base = np.zeros((0,), dtype=np.float32) if self._env_state_mode == "extra_only" else env_state
+            env_state = _append_extra_features(
+                base, extras, len(self._extra_features), self.env_id
+            )
+        elif self._env_state_mode == "extra_only":
+            env_state = np.zeros((0,), dtype=np.float32)
         image_resized = _resize_image(image, self._resolution)
         self.action_queries += 1
-        batch = {
+        batch: dict[str, object] = {
             OBS_IMAGE_KEY: torch.from_numpy(image_resized).unsqueeze(0),
             OBS_STATE_KEY: torch.from_numpy(robot).unsqueeze(0),
-            OBS_ENV_STATE_KEY: torch.from_numpy(env_state).unsqueeze(0),
         }
+        if env_state.shape[-1] > 0:  # 0 维 = 训练时就没用 ENV 通道
+            batch[OBS_ENV_STATE_KEY] = torch.from_numpy(env_state).unsqueeze(0)
         started = time.perf_counter()
         processed = self._pre(batch)
         action = self._policy.select_action(processed)
@@ -1150,6 +1281,81 @@ def _resolve_checkpoint_subdir(
     raise VisualACTError(f"{env_id} 没有可用 checkpoint 子目录")
 
 
+def _read_optional_json_object(path: Path) -> dict[str, Any]:
+    """读 JSON 对象；文件不存在返回空 dict（用于"可选元数据"）。"""
+    return _read_json_object(path) if path.is_file() else {}
+
+
+def env_feature_dim(features: Mapping[str, Any]) -> int | None:
+    """从 `input_features` 映射里取 ENV 通道维度（没有该通道返回 `None`）。
+
+    同一份 `input_features` 有两种形态，**必须都认**：磁盘 `config.json` 里是
+    `{"shape": [n]}` 这样的 dict，而内存里 `ACTConfig.input_features` 是 `PolicyFeature`
+    对象（`.shape` 属性）。只认 dict 会让下面"重建维度对账"在真正出问题时静默失效
+    （`None` 被当成 0），把可定位的报错退化成晦涩的形状不符。
+    """
+    if not isinstance(features, Mapping):
+        return None
+    entry = features.get(OBS_ENV_STATE_KEY)
+    if entry is None:
+        return None
+    if isinstance(entry, Mapping):
+        shape = entry.get("shape")
+    else:
+        shape = getattr(entry, "shape", None)
+    if not isinstance(shape, (list, tuple)) or not shape:
+        return None
+    try:
+        return int(shape[0])
+    except (TypeError, ValueError):
+        return None
+
+
+def saved_env_feature_dim(saved: Mapping[str, Any]) -> int | None:
+    """从 checkpoint 的 `config.json` 取 ENV 通道维度（没有该通道返回 `None`）。
+
+    这是**权重侧的事实**：`encoder_1d_feature_pos_embed` 的行数就由"注册了几个 1D 输入"决定，
+    所以重建 config 后必须拿它对账，否则口径读错只会表现为晦涩的形状不匹配。
+    """
+    return env_feature_dim(saved.get("input_features"))
+
+
+def resolve_checkpoint_env_config(
+    saved: Mapping[str, Any],
+    metadata: Mapping[str, Any],
+) -> tuple[tuple[str, ...], str]:
+    """决定重建 config 用的 ``(extra_features, env_state_mode)``。
+
+    **口径的权威来源是训练时落盘的 `task_metadata.json`**，它和 checkpoint 同属一个任务目录。
+    checkpoint 自己的 `config.json` 是 `ACTPolicy` 的配置，**不含**这两个字段 ——
+    早期实现只看 `config.json`，于是 `env_state_mode` 退化成 `"full"`，
+    给 B0（`extra_only` + 空列）多注册了一个 13 维 ENV 输入，加载时报
+    `encoder_1d_feature_pos_embed` 行数不符（`[3,512]` vs `[2,512]`）。
+
+    两者都缺时按 `input_features` 反推：能唯一确定"没有 ENV"（→ `extra_only` + 空列）
+    与"ENV 恰好 13 维"（→ `full`）；其余情况说明它带额外列却丢了元数据，
+    **必须报错**——额外列的**名字**无从恢复，猜一个就等于把列序错配埋进推理。
+    """
+    extra_features = tuple(
+        str(item)
+        for item in metadata.get("extra_features", saved.get("extra_features", ()) or ())
+    )
+    mode = metadata.get("env_state_mode", saved.get("env_state_mode"))
+    if mode is not None:
+        return extra_features, str(mode)
+
+    dim = saved_env_feature_dim(saved)
+    if dim is None or dim == 0:
+        return extra_features, "extra_only"
+    if dim == ENV_STATE_DIM:
+        return extra_features, "full"
+    raise VisualACTError(
+        f"checkpoint 带 {dim} 维 ENV 通道，但找不到口径元数据（`task_metadata.json` 缺失）："
+        f"无法还原额外列的**名字与顺序**。请把训练时的 `task_metadata.json` 放回任务目录，"
+        f"不要靠猜列序来加载"
+    )
+
+
 def load_visual_act_checkpoints(
     output_dir: Path,
     *,
@@ -1158,6 +1364,7 @@ def load_visual_act_checkpoints(
     tasks: Sequence[str] | None = None,
     checkpoint_subdir: str | None = None,
     action_smoothing: float = 1.0,
+    extra_provider: Callable[[Mapping[str, object]], Sequence[float]] | None = None,
 ) -> dict[str, VisualACTPolicy]:
     """只从本地目录加载视觉 ACT policy 与 processors。"""
     device = _select_device(device)
@@ -1189,6 +1396,13 @@ def load_visual_act_checkpoints(
         if not 1 <= saved_n_action_steps <= chunk_size:
             raise VisualACTError(f"{env_id} 保存的 chunk 配置错误")
         vision_backbone = str(saved.get("vision_backbone", "resnet18"))
+        # 回读 B 变体的额外观测通道与 ENV 口径。**口径不在 checkpoint 自己的 config.json 里**
+        # （那是 ACTPolicy 的配置），而在同级的 `task_metadata.json`；读错会让重建的
+        # input_features 与权重不符（见 resolve_checkpoint_env_config 的说明）。
+        metadata = _read_optional_json_object(best_dir.parent / "task_metadata.json")
+        if not metadata:
+            metadata = _read_optional_json_object(best_dir / "task_metadata.json")
+        extra_features, env_state_mode = resolve_checkpoint_env_config(saved, metadata)
         config = make_visual_act_config(
             VisualACTTrainingConfig(
                 dataset_dir=output_dir,
@@ -1209,10 +1423,25 @@ def load_visual_act_checkpoints(
                 kl_weight=float(saved["kl_weight"]),
                 dropout=float(saved["dropout"]),
                 vision_backbone=vision_backbone,
+                extra_features=extra_features,
+                # **必须把回读到的口径传进去**：漏传会退回默认 `"full"`，
+                # 于是 B0（`extra_only` + 空列）被重建出一个 13 维 ENV 输入，
+                # 加载时在 `encoder_1d_feature_pos_embed` 上报 [3,512] vs [2,512]。
+                env_state_mode=env_state_mode,
                 pretrained_backbone_weights=None,
                 device=device,
             )
         )
+        # 对账：重建出来的 ENV 通道维度必须与 checkpoint 记录的**完全一致**。
+        # 口径读错时这里会给出可定位的报错；否则它只会在 `encoder_1d_feature_pos_embed`
+        # 上以"形状不符"的形式炸出来（[3,512] vs [2,512]），看的人得反推是哪一步错了。
+        expected_env_dim = saved_env_feature_dim(saved) or 0
+        rebuilt_env_dim = env_feature_dim(getattr(config, "input_features", {}) or {}) or 0
+        if rebuilt_env_dim != expected_env_dim:
+            raise VisualACTError(
+                f"{env_id} 重建的 ENV 通道 {rebuilt_env_dim} 维与 checkpoint 记录的 "
+                f"{expected_env_dim} 维不一致：`env_state_mode`/`extra_features` 读错了"
+            )
         policy = ACTPolicy.from_pretrained(best_dir, config=config)
         policy.to(device)
         # 跨设备兼容：4060 上以 cuda 训练的 checkpoint，其 processor 的
@@ -1238,6 +1467,9 @@ def load_visual_act_checkpoints(
             postprocessor=post,
             resolution=resolution,
             action_smoothing=action_smoothing,
+            extra_features=extra_features,
+            extra_provider=extra_provider,
+            env_state_mode=env_state_mode,
         )
     return policies
 
@@ -1309,9 +1541,14 @@ def evaluate_visual_act(
     resolution: int,
     tasks: Sequence[str] | None = None,
     checkpoint_subdir: str | None = None,
+    extra_provider: Callable[[Mapping[str, object]], Sequence[float]] | None = None,
     env_factory: Callable[[ManiSkillTaskConfig], object] = make_render_env,
 ) -> PolicyEvaluationSummary:
-    """从磁盘重载视觉 ACT checkpoint 后执行固定 seed 评测并落盘。"""
+    """从磁盘重载视觉 ACT checkpoint 后执行固定 seed 评测并落盘。
+
+    `extra_provider`：B1–B3 带额外观测通道，**必须**提供与训练同序的特征计算函数，
+    否则 `VisualACTPolicy` 会直接报错（不允许补 0，见其构造注释）。B0 传 `None`。
+    """
     from lerobot_act import (
         ACTEvaluationEpisode,
         ACTEvaluationTask,
@@ -1325,6 +1562,7 @@ def evaluate_visual_act(
         resolution=resolution,
         tasks=checked_tasks,
         checkpoint_subdir=checkpoint_subdir,
+        extra_provider=extra_provider,
     )
     episodes: list[ACTEvaluationEpisode] = []
     for env_id in checked_tasks:

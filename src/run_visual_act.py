@@ -75,6 +75,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="视觉 DAgger 补采 npz，合并进对应任务的训练数据",
     )
+    parser.add_argument(
+        "--extra-features",
+        default="",
+        help="逗号分隔的额外观测通道特征名（第 38 周 P0/B1–B3；"
+        "空 = B0 仅 RGB）。列会追加在 ENV 辅助向量尾部，需与数据集列序一致",
+    )
     parser.add_argument("--eval-seed-start", type=int, default=500)
     parser.add_argument("--eval-episodes-per-task", type=int, default=10)
     parser.add_argument("--skip-training", action="store_true")
@@ -124,6 +130,9 @@ def main(argv: list[str] | None = None) -> int:
             train_episodes_per_task=args.train_episodes_per_task,
             validation_episodes_per_task=args.validation_episodes_per_task,
             dagger_data=args.dagger_data,
+            extra_features=tuple(
+                item.strip() for item in args.extra_features.split(",") if item.strip()
+            ),
         )
         output_dir = config.output_dir
         peak_rss_before = _peak_rss()
