@@ -1,0 +1,49 @@
+{
+  "base": "runs\\maniskill_lerobot\\week15-cam",
+  "variants": [
+    {
+      "variant": "B0",
+      "out_root": "runs\\week38\\ablation_data\\B0",
+      "env_dim": 13,
+      "frames": 3257,
+      "extra_features": [],
+      "open_width": 0.07999999821186066,
+      "closed_width": 0.0,
+      "copied_files": 7,
+      "video_hardlinked": true,
+      "warnings": []
+    },
+    {
+      "variant": "B1",
+      "out_root": "runs\\week38\\ablation_data\\B1",
+      "env_dim": 15,
+      "frames": 3257,
+      "extra_features": [
+        "depth_known_size_m",
+        "depth_known_size_sigma_m"
+      ],
+      "open_width": 0.07999999821186066,
+      "closed_width": 0.0,
+      "copied_files": 7,
+      "video_hardlinked": true,
+      "warnings": []
+    },
+    {
+      "variant": "B2",
+      "out_root": "runs\\week38\\ablation_data\\B2",
+      "env_dim": 17,
+      "frames": 3257,
+      "extra_features": [
+        "depth_known_size_m",
+        "depth_known_size_sigma_m",
+        "load_gripper_permille",
+        "contact_flag"
+      ],
+      "open_width": 0.07999999821186066,
+      "closed_width": 0.0,
+      "copied_files": 7,
+      "video_hardlinked": true,
+      "warnings": []
+    }
+  ]
+}
